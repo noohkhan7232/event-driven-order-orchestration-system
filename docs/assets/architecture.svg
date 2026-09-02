@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="680" viewBox="0 0 1180 680" role="img" aria-labelledby="title desc">
+  <title id="title">Backend Architecture</title>
+  <desc id="desc">FastAPI backend architecture with client, authentication, service layer, PostgreSQL, Redis, RabbitMQ, Celery workers, and background processing.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#335c81"/>
+    </marker>
+    <style>
+      .bg { fill: #f7fbff; }
+      .box { fill: #ffffff; stroke: #335c81; stroke-width: 2; rx: 14; }
+      .box2 { fill: #eef6ff; stroke: #335c81; stroke-width: 2; rx: 14; }
+      .data { fill: #fff8eb; stroke: #9a6b18; stroke-width: 2; rx: 14; }
+      .queue { fill: #f5f0ff; stroke: #6d4ac7; stroke-width: 2; rx: 14; }
+      .worker { fill: #eefaf1; stroke: #2f7d45; stroke-width: 2; rx: 14; }
+      .title { font-family: Arial, sans-serif; font-size: 24px; font-weight: 700; fill: #15324b; }
+      .label { font-family: Arial, sans-serif; font-size: 16px; font-weight: 700; fill: #15324b; }
+      .small { font-family: Arial, sans-serif; font-size: 13px; fill: #37536b; }
+      .line { stroke: #335c81; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #6d4ac7; stroke-width: 2; stroke-dasharray: 7 6; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect class="bg" width="1180" height="680"/>
+  <text x="40" y="48" class="title">Distributed Order Processing Architecture</text>
+  <text x="40" y="75" class="small">Production-style backend portfolio architecture: API, auth, database, queues, workers, observability, and Dockerized services.</text>
+
+  <rect x="45" y="145" width="175" height="90" class="box"/>
+  <text x="75" y="180" class="label">Client</text>
+  <text x="75" y="205" class="small">Swagger UI / API</text>
+  <text x="75" y="224" class="small">Internal tools</text>
+
+  <rect x="295" y="120" width="205" height="130" class="box2"/>
+  <text x="340" y="155" class="label">FastAPI API</text>
+  <text x="325" y="181" class="small">Versioned REST routes</text>
+  <text x="325" y="201" class="small">Validation + schemas</text>
+  <text x="325" y="221" class="small">Logging + timing</text>
+
+  <rect x="295" y="310" width="205" height="105" class="box"/>
+  <text x="337" y="345" class="label">JWT + RBAC</text>
+  <text x="325" y="371" class="small">Login -> access token</text>
+  <text x="325" y="391" class="small">Protected routes</text>
+
+  <rect x="590" y="115" width="210" height="135" class="box"/>
+  <text x="628" y="150" class="label">Service Layer</text>
+  <text x="620" y="176" class="small">Business workflows</text>
+  <text x="620" y="196" class="small">Repository pattern</text>
+  <text x="620" y="216" class="small">Exceptions + audit</text>
+
+  <rect x="900" y="95" width="210" height="105" class="data"/>
+  <text x="947" y="132" class="label">PostgreSQL</text>
+  <text x="930" y="158" class="small">Relational models</text>
+  <text x="930" y="178" class="small">Indexes + migrations</text>
+
+  <rect x="900" y="245" width="210" height="95" class="queue"/>
+  <text x="957" y="281" class="label">RabbitMQ</text>
+  <text x="930" y="307" class="small">Task queues</text>
+  <text x="930" y="327" class="small">Dead-letter queue</text>
+
+  <rect x="900" y="385" width="210" height="95" class="data"/>
+  <text x="973" y="421" class="label">Redis</text>
+  <text x="930" y="447" class="small">Cache / result backend</text>
+  <text x="930" y="467" class="small">Rate limit ready</text>
+
+  <rect x="590" y="330" width="210" height="125" class="worker"/>
+  <text x="632" y="366" class="label">Celery Workers</text>
+  <text x="620" y="392" class="small">Background jobs</text>
+  <text x="620" y="412" class="small">Retries + backoff</text>
+  <text x="620" y="432" class="small">Async processing</text>
+
+  <rect x="295" y="500" width="205" height="90" class="box"/>
+  <text x="340" y="535" class="label">Observability</text>
+  <text x="325" y="561" class="small">Health endpoints</text>
+  <text x="325" y="581" class="small">Structured logs</text>
+
+  <path class="line" d="M220 190 H295"/>
+  <path class="line" d="M500 185 H590"/>
+  <path class="line" d="M800 170 H900"/>
+  <path class="line" d="M397 250 V310"/>
+  <path class="dash" d="M800 220 C850 230 855 270 900 292"/>
+  <path class="dash" d="M900 292 H800"/>
+  <path class="dash" d="M900 432 H800"/>
+  <path class="dash" d="M695 330 V250"/>
+  <path class="line" d="M590 392 H500 C460 392 455 415 455 500"/>
+  <path class="line" d="M397 415 V500"/>
+
+  <text x="54" y="645" class="small">Auth flow: client logs in, receives JWT, sends Bearer token to protected FastAPI endpoints. Async flow: API persists intent, publishes task, Celery worker processes, updates PostgreSQL, stores task result/cache in Redis.</text>
+</svg>
