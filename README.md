@@ -1,4 +1,4 @@
-# Distributed Order Processing System
+# Event-Driven Order Orchestration System
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
@@ -6,42 +6,81 @@
 ![RabbitMQ](https://img.shields.io/badge/RabbitMQ-Queues-FF6600?logo=rabbitmq&logoColor=white)
 ![Celery](https://img.shields.io/badge/Celery-Workers-37814A)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-Production-style FastAPI backend for an event-driven e-commerce/logistics order platform. It demonstrates order intake, inventory reservation, payment orchestration, shipment lifecycle handling, retry/failure recovery, and observability across queues and workers.
-
-This is a recruiter-facing distributed backend portfolio project. It shows how API, database, queue, worker, and operational components fit together in a realistic order processing workflow.
-
-![Architecture Diagram](docs/assets/architecture.svg)
+A production-style, event-driven backend that simulates how real e-commerce and logistics platforms process orders — where placing an order isn't one action, but a chain of independent steps (inventory, payment, shipping) that each need to succeed, fail, retry, or roll back on their own.
 
 ---
 
-## Business Problem
+## The Problem
 
-Order platforms coordinate multiple workflows that can fail independently: inventory may be unavailable, payment may fail, shipment creation may be delayed, and duplicate requests must be handled safely. This backend simulates those concerns with idempotent APIs, event-driven workflow steps, compensation logic, and persistent auditability.
+Most "order system" demo projects are a single `POST /orders` endpoint that writes one row to a database. That's not how order processing actually works at scale.
 
-## Architecture Overview
+In a real system:
 
-- **Client / partner API** creates orders with an idempotency key.
-- **FastAPI API** authenticates users, validates requests, persists order records, and publishes events.
-- **JWT + RBAC** supports customer, vendor, and admin role behavior.
-- **PostgreSQL** stores users, orders, inventory, warehouses, payments, shipments, events, audit logs, and failed jobs.
-- **RabbitMQ** routes workflow events to order, inventory, payment, shipment, and dead-letter queues.
-- **Celery workers** execute inventory reservation, payment simulation, shipment creation, retries, and compensation workflows.
-- **Redis** stores Celery results and supports cache/readiness patterns.
-- **Docker Compose** runs API, worker, scheduler, PostgreSQL, Redis, and RabbitMQ.
+- **Inventory might be unavailable** by the time payment is attempted.
+- **Payment might fail** after inventory has already been reserved.
+- **A network retry or a double-click** can send the exact same order request twice — and naive systems create two orders and charge twice.
+- **A background job can crash mid-task**, and if there's no retry or dead-letter handling, that order silently disappears.
+- **API response time matters** — a client shouldn't have to wait 5+ seconds while inventory, payment, and shipping are processed synchronously inside one request.
+
+These are the problems that separate a tutorial project from a system that could survive real traffic.
+
+## The Solution
+
+This project solves each of those problems directly, using patterns taken from real distributed backend architecture:
+
+| Problem | How this project solves it |
+|---|---|
+| Duplicate order requests (retries, double-clicks) | Every order requires an `Idempotency-Key` header. The same key always returns the same order — no duplicate orders, no duplicate charges. |
+| Slow, blocking order creation | The API only validates and persists the order intent, then publishes an event to RabbitMQ and returns immediately. All heavy work happens asynchronously. |
+| Multi-step workflows that can partially fail | Order → inventory reservation → payment authorization → shipment creation is broken into discrete steps, each independently retryable, with compensation logic (e.g., releasing reserved inventory if payment fails). |
+| Jobs that fail permanently | Failed tasks retry with backoff; if retries are exhausted, the job is moved to a dead-letter queue and persisted in a `failed_jobs` table instead of vanishing. |
+| "Is the system healthy?" | Health, metrics, and worker-monitoring endpoints expose the real-time state of the API and background workers. |
+| Access control | JWT-based authentication with role separation between customer, vendor, and admin. |
+
+## How It Works (Architecture)
+
+![Architecture Diagram](docs/assets/architecture.png)
+
+**Request flow:**
+
+1. Client authenticates and receives a JWT.
+2. Client sends `POST /orders` with an `Idempotency-Key`.
+3. The API validates the request, checks the idempotency key, and persists the order as `pending`.
+4. The API publishes an `order.created` event to RabbitMQ and immediately returns a response — the client is never blocked waiting for fulfillment.
+5. A Celery worker picks up the event and executes the workflow: reserve inventory → authorize payment → create shipment.
+6. Each step updates PostgreSQL and emits audit log entries.
+7. If a step fails, the worker retries with backoff; if retries are exhausted, the job is dead-lettered and logged to `failed_jobs` for investigation.
+8. Redis backs Celery's result store and supports fast read/cache patterns.
+
+This decouples the **API layer** (fast, synchronous, user-facing) from the **fulfillment layer** (slow, asynchronous, failure-tolerant) — which is the core idea behind event-driven backend design.
+
+## Demo Video
+[![Watch the Demo Video Part 1]](docs/assets/part1.mp4)
+[![Watch the Demo Video Part 2]](docs/assets/part2.mp4)
+
+Note: The project demo video has been divided into two parts because GitHub does not allow large files to be committed. Therefore, the demo video is provided in two separate parts.
+
+## 📖 Demo Explanation
+
+For a detailed explanation of the demo and its workflow:
+
+👉 [Read the Demo Video Explanation](docs/demo-video-explanation.md)
+
 
 ## Key Features
 
 - JWT authentication and RBAC roles: customer, vendor, admin
-- idempotent order creation via `Idempotency-Key`
-- order history and lifecycle status tracking
-- inventory reservation, stock deduction, and release on failure
-- payment initiation, success/failure simulation, retry, and compensation workflows
-- shipment creation, shipment events, tracking status, and delayed shipment hooks
+- Idempotent order creation via `Idempotency-Key`
+- Order history and lifecycle status tracking
+- Inventory reservation, stock deduction, and release on failure
+- Payment initiation, success/failure simulation, retry, and compensation workflows
+- Shipment creation, shipment events, tracking status, and delayed shipment hooks
 - RabbitMQ queues, Celery workers, scheduled jobs, retries, and dead-letter handling
-- audit logs and failed job persistence
-- structured JSON logging, request timing, health checks, metrics, and worker monitoring endpoints
-- Docker Compose stack and pytest tests for API/worker flows
+- Audit logs and failed job persistence
+- Structured JSON logging, request timing, health checks, metrics, and worker monitoring endpoints
+- Full Docker Compose stack and pytest coverage for API/worker flows
 
 ## Technology Stack
 
@@ -74,6 +113,7 @@ app/
   tests/            pytest API and worker-flow tests
 scripts/            demo data seeding
 alembic/            migration history
+docs/               architecture diagram, recruiter review
 ```
 
 ## API Documentation
@@ -95,10 +135,10 @@ http://127.0.0.1:8000/openapi.json
 ```bash
 curl -X POST http://localhost:8000/api/v1/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"email":"customer@orders.local","password":"CustomerPass123","full_name":"Demo Customer"}'
+  -d '{"email":"customer@ordersapp.com","password":"CustomerPass123","full_name":"Demo Customer"}'
 ```
 
-Use the returned token:
+Use the returned token on subsequent requests:
 
 ```http
 Authorization: Bearer <access_token>
@@ -118,11 +158,16 @@ curl -X POST http://localhost:8000/api/v1/orders \
 
 ```json
 {
-  "status": "accepted",
-  "order_status": "pending",
-  "message": "Order accepted for async processing"
+  "id": "7bed0cac-dbc0-4137-986a-42bfada3e0bc",
+  "status": "fulfillment_requested",
+  "total_amount": "99.98",
+  "currency": "USD",
+  "payments": [{ "status": "authorized" }],
+  "shipments": [{ "status": "created", "tracking_number": "ARCBFC3ECEE49DD" }]
 }
 ```
+
+Sending the exact same request again with the same `Idempotency-Key` returns this exact same response — no duplicate order is created.
 
 Operational endpoints:
 
@@ -132,39 +177,27 @@ curl http://localhost:8000/api/v1/system/metrics
 curl http://localhost:8000/api/v1/system/workers
 ```
 
-## Distributed Workflow
-
-1. Client submits order with `Idempotency-Key`.
-2. API validates user, request body, and duplicate key behavior.
-3. Order and audit records are persisted.
-4. `order.created` event is published to RabbitMQ.
-5. Worker reserves inventory.
-6. Payment simulation authorizes or fails payment.
-7. Shipment workflow creates tracking records.
-8. Failures trigger retry or compensation such as inventory release.
-9. Failed jobs are persisted and dead-lettered for diagnostics.
-
 ## Database Design Overview
 
 Primary entities:
 
-- `users`: authenticated platform actors with role assignments
-- `orders`: order aggregate, idempotency key, and lifecycle state
-- `order_items`: line items and SKU quantities
-- `warehouses`: warehouse simulation data
-- `inventory`: stock, reserved quantity, and low-stock state
-- `payments`: payment transaction state and provider simulation result
-- `shipments`: tracking number, carrier, and fulfillment status
-- `shipment_events`: timestamped shipment lifecycle updates
-- `audit_logs`: traceable workflow and correction events
-- `failed_jobs`: exhausted retry/dead-letter diagnostics
+- `users` — authenticated platform actors with role assignments
+- `orders` — order aggregate, idempotency key, and lifecycle state
+- `order_items` — line items and SKU quantities
+- `warehouses` — warehouse simulation data
+- `inventory` — stock, reserved quantity, and low-stock state
+- `payments` — payment transaction state and provider simulation result
+- `shipments` — tracking number, carrier, and fulfillment status
+- `shipment_events` — timestamped shipment lifecycle updates
+- `audit_logs` — traceable workflow and correction events
+- `failed_jobs` — exhausted retry/dead-letter diagnostics
 
-Database practices shown:
+Database practices demonstrated:
 
 - UUID primary keys
-- foreign key relationships across order, payment, shipment, inventory, and audit records
-- indexes for idempotency key, order status, SKU, shipment tracking, and time-based lookups
-- Alembic migration in `alembic/versions`
+- Foreign key relationships across order, payment, shipment, inventory, and audit records
+- Indexes for idempotency key, order status, SKU, shipment tracking, and time-based lookups
+- Alembic migrations in `alembic/versions`
 
 ## Docker Setup
 
@@ -182,13 +215,13 @@ Services:
 | `scheduler` | Celery Beat scheduled jobs |
 | `postgres` | PostgreSQL database |
 | `redis` | Celery result backend |
-| `rabbitmq` | broker and management UI |
+| `rabbitmq` | Broker and management UI |
 
-Initialize demo data:
+Initialize the database and demo data:
 
 ```bash
 docker compose exec api alembic upgrade head
-docker compose exec api python scripts/seed_demo.py
+docker compose exec api python -m scripts.seed_demo
 ```
 
 RabbitMQ management UI:
@@ -209,7 +242,7 @@ make seed
 make run
 ```
 
-Run worker locally:
+Run a worker locally:
 
 ```bash
 make worker
@@ -223,10 +256,10 @@ make test
 
 Test coverage includes:
 
-- authentication and order API behavior
-- health endpoint behavior
-- worker flow simulation
-- inventory/payment/shipment orchestration paths
+- Authentication and order API behavior
+- Health endpoint behavior
+- Worker flow simulation
+- Inventory/payment/shipment orchestration paths
 
 ## Environment Variables
 
@@ -246,14 +279,23 @@ A concise hiring-manager style review is available here: [`docs/recruiter-review
 
 ## Future Enhancements
 
-- transactional outbox for stronger event publication guarantees
-- split inventory/payment/shipping into independent services
-- payment gateway adapter layer
+- Transactional outbox for stronger event publication guarantees
+- Split inventory/payment/shipping into independent services
+- Payment gateway adapter layer
 - OpenTelemetry traces across API and workers
-- warehouse allocation optimization
+- Warehouse allocation optimization
 - Kafka event stream for analytics fan-out
-- admin DLQ replay and compensation dashboard
+- Admin DLQ replay and compensation dashboard
 
-## Recruiter-Facing Summary
+## License
 
-This project demonstrates backend and platform engineering signals recruiters can verify quickly: FastAPI APIs, PostgreSQL modeling, SQLAlchemy/Alembic, JWT/RBAC, RabbitMQ/Celery workflows, Redis, idempotency, compensation logic, Docker Compose, tests, metrics, and worker monitoring. It is the strongest repository to review first for Python Backend Engineer, Backend API Engineer, and Platform Engineer roles.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## Author
+
+**NOOH KHAN**
+[GitHub](https://github.com/noohkhan7232)
+
+---
+
+This project demonstrates backend and platform engineering signals that can be verified quickly: FastAPI APIs, PostgreSQL modeling, SQLAlchemy/Alembic, JWT/RBAC, RabbitMQ/Celery workflows, Redis, idempotency, compensation logic, Docker Compose, automated tests, metrics, and worker monitoring.
