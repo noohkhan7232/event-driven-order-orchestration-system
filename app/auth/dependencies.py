@@ -2,7 +2,7 @@ from collections.abc import Callable
 from uuid import UUID
 
 from fastapi import Depends
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.auth.security import decode_access_token
@@ -12,10 +12,14 @@ from app.models.entities import User
 from app.models.enums import UserRole
 from app.repositories.users import UserRepository
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+bearer_scheme = HTTPBearer()
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    token = credentials.credentials
     try:
         payload = decode_access_token(token)
         user_id = UUID(payload["sub"])
