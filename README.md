@@ -270,7 +270,8 @@ See [`.env.example`](.env.example). Important values:
 - `REDIS_URL`
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND`
-- `SECRET_KEY`
+- `SECRET_KEY` (at least 32 characters and not a known default outside local/development/test)
+- `METRICS_TOKEN` (required to enable metrics outside local/development/test; authenticate with this bearer token or an admin JWT)
 
 ## Project Review
 

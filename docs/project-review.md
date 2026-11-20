@@ -5,6 +5,7 @@
 - FastAPI schemas separate API contracts from SQLAlchemy persistence.
 - Modular services demonstrate inventory, simulated payment and shipment orchestration.
 - JWT role checks, audit records, migrations and automated tests provide reviewable examples.
+- Order request idempotency is scoped to the customer: matching payloads replay the current order, while changed payloads return 409. Currency is uppercased and items are sorted for request hashing; keys do not expire.
 - Compose describes an API, Celery workers, scheduler, PostgreSQL, Redis and RabbitMQ stack.
 
 ## Known limitations

@@ -1,4 +1,4 @@
-.PHONY: install run test lint migrate seed worker docker-up docker-down
+.PHONY: install run test lint format typecheck test-cov migrate seed worker docker-up docker-down
 
 install:
 	python -m pip install -r requirements-dev.txt
@@ -16,7 +16,7 @@ migrate:
 	alembic upgrade head
 
 seed:
-	python scripts/seed_demo.py
+	python -m scripts.seed_demo
 
 docker-up:
 	docker compose up --build
