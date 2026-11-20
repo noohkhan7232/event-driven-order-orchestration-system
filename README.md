@@ -1,5 +1,7 @@
 # Event-Driven Order Orchestration System
 
+[![CI](https://github.com/noohkhan7232/event-driven-order-orchestration-system/actions/workflows/ci.yml/badge.svg)](https://github.com/noohkhan7232/event-driven-order-orchestration-system/actions/workflows/ci.yml)
+
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-SQLAlchemy-336791?logo=postgresql&logoColor=white)
