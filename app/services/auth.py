@@ -14,10 +14,11 @@ class AuthService:
         self.users = UserRepository(db)
 
     def register(self, payload: UserCreate) -> User:
-        if self.users.get_by_email(payload.email):
+        email = payload.email.lower()
+        if self.users.get_by_email(email):
             raise ConflictError("A user with this email already exists")
         user = User(
-            email=payload.email.lower(),
+            email=email,
             hashed_password=hash_password(payload.password),
             full_name=payload.full_name,
             role=UserRole.CUSTOMER,

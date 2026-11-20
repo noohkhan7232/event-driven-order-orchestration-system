@@ -4,6 +4,13 @@ from app.models.entities import Order
 from app.repositories.orders import OrderRepository
 
 
+def test_signup_email_normalizes_before_duplicate_check(client):
+    payload = {"email": "a@example.com", "password": "strong-password", "full_name": "Test User"}
+    assert client.post("/api/v1/auth/signup", json=payload).status_code == 201
+    response = client.post("/api/v1/auth/signup", json={**payload, "email": "A@example.com"})
+    assert response.status_code == 409
+
+
 def post_order(client, headers, key="shared", quantity=1, currency="USD"):
     return client.post(
         "/api/v1/orders",
