@@ -1,3 +1,5 @@
+Video pending: this document describes the intended demonstration.
+
 # Demo Video Explanation
 
 This document explains, step by step, what is shown in the demo video for the **Event-Driven Order Orchestration System**.
