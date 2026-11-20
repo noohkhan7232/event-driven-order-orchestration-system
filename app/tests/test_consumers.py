@@ -1,27 +1,9 @@
-from contextlib import nullcontext
-from uuid import uuid4
-
 import pytest
 
 from app.events.contracts import DomainEvent, EventNames
-from app.models.entities import Inventory, Order, OrderItem, Payment, Shipment, User, Warehouse
-from app.models.enums import OrderStatus, UserRole
+from app.models.entities import Payment, Shipment
+from app.models.enums import OrderStatus
 from app.workers import tasks
-
-
-@pytest.fixture
-def workflow(db, monkeypatch):
-    user = User(email="flow@example.com", hashed_password="hash", full_name="Flow", role=UserRole.CUSTOMER)
-    warehouse = Warehouse(code="FLOW", name="Flow", region="test")
-    db.add_all([user, warehouse])
-    db.flush()
-    stock = Inventory(sku="SKU", product_name="Product", warehouse_id=warehouse.id, available_quantity=10)
-    order = Order(customer_id=user.id, idempotency_key=str(uuid4()), status=OrderStatus.CREATED)
-    order.items.append(OrderItem(sku="SKU", product_name="Product", quantity=1, unit_price=10))
-    db.add_all([stock, order])
-    db.commit()
-    monkeypatch.setattr(tasks, "SessionLocal", lambda: nullcontext(db))
-    return order, stock
 
 
 def consume(order, kind, event=None):

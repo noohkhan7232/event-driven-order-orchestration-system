@@ -30,3 +30,8 @@ class ShippingService:
         self.db.add(
             AuditLog(entity_type="shipment", entity_id=shipment.id, action=f"shipment_{status.value}", payload={})
         )
+
+    def cancel_for_order(self, order: Order) -> None:
+        for shipment in order.shipments:
+            if shipment.status != ShipmentStatus.CANCELLED:
+                self.record_event(shipment, ShipmentStatus.CANCELLED, None, "Order cancelled")

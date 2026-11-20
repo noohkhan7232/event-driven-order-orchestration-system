@@ -17,6 +17,7 @@ from app.repositories.outbox import OutboxRepository
 from app.schemas.orders import OrderCreate, OrderItemCreate
 from app.services.inventory import InventoryService
 from app.services.payments import PaymentService
+from app.services.shipping import ShippingService
 
 
 class OrderService:
@@ -96,8 +97,8 @@ class OrderService:
             raise IdempotencyConflictError("This idempotency key was already used with a different payload")
         return order
 
-    def get_order(self, order_id: UUID, user: User) -> Order:
-        order = self.orders.get_with_details(order_id)
+    def get_order(self, order_id: UUID, user: User, *, for_update: bool = False) -> Order:
+        order = self.orders.get_with_details(order_id, for_update=for_update)
         if not order:
             raise NotFoundError("Order not found")
         if user.role == UserRole.CUSTOMER and order.customer_id != user.id:
@@ -105,17 +106,33 @@ class OrderService:
         return order
 
     def cancel_order(self, order_id: UUID, user: User, reason: str | None = None) -> Order:
-        order = self.get_order(order_id, user)
-        if order.status == OrderStatus.CANCELLED:
-            return order
-        if order.status in {OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.FAILED}:
-            raise ConflictError("Terminal orders cannot be cancelled")
-        InventoryService(self.db).release_for_order(order)
-        PaymentService(self.db).refund(order)
-        transition(order, OrderStatus.CANCELLED, db=self.db)
-        order.failure_reason = reason
-        self.db.add(
-            AuditLog(actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={})
-        )
-        self.db.commit()
-        return self.orders.get_with_details(order.id) or order
+        try:
+            order = self.get_order(order_id, user, for_update=True)
+            if order.status == OrderStatus.CANCELLED:
+                self.db.commit()
+                return order
+            if order.status in {OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.FAILED}:
+                raise ConflictError("Terminal orders cannot be cancelled")
+            InventoryService(self.db).release_for_order(order)
+            PaymentService(self.db).refund(order)
+            ShippingService(self.db).cancel_for_order(order)
+            transition(order, OrderStatus.CANCELLED, db=self.db, reason=reason, actor=user.id)
+            self.db.add(
+                AuditLog(
+                    actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={}
+                )
+            )
+            self.outbox.add(
+                DomainEvent(
+                    event_type="order.cancelled",
+                    aggregate_id=order.id,
+                    payload={"order_id": str(order.id)},
+                    correlation_id=get_contextvars().get("request_id"),
+                ),
+                "orders",
+            )
+            self.db.commit()
+            return self.orders.get_with_details(order.id) or order
+        except Exception:
+            self.db.rollback()
+            raise

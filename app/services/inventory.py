@@ -11,11 +11,17 @@ class InventoryService:
         self.inventory = InventoryRepository(db)
 
     def reserve_for_order(self, order: Order) -> None:
-        for item in order.items:
-            locations = self.inventory.get_by_sku(item.sku)
-            selected = next((row for row in locations if row.available_quantity >= item.quantity), None)
-            if not selected:
+        rows = self.inventory.lock_skus({item.sku for item in order.items})
+        remaining = {row.id: row.available_quantity for row in rows}
+        allocations = []
+        for item in sorted(order.items, key=lambda item: item.sku):
+            selected = next((row for row in rows if row.sku == item.sku and remaining[row.id] >= item.quantity), None)
+            if selected is None:
                 raise InsufficientInventoryError("Insufficient inventory", {"sku": item.sku, "quantity": item.quantity})
+            remaining[selected.id] -= item.quantity
+            allocations.append((item, selected))
+        # Plan every allocation before changing any stock or item warehouse assignment.
+        for item, selected in allocations:
             selected.available_quantity -= item.quantity
             selected.reserved_quantity += item.quantity
             item.product_name = selected.product_name
@@ -26,11 +32,13 @@ class InventoryService:
     def release_for_order(self, order: Order) -> None:
         if not order.inventory_reserved:
             return
-        for item in order.items:
+        rows = self.inventory.lock_skus({item.sku for item in order.items})
+        for item in sorted(order.items, key=lambda item: item.sku):
             if not item.warehouse_id:
                 continue
-            rows = self.inventory.get_by_sku(item.sku)
-            selected = next((row for row in rows if row.warehouse_id == item.warehouse_id), None)
+            selected = next(
+                (row for row in rows if row.sku == item.sku and row.warehouse_id == item.warehouse_id), None
+            )
             if selected:
                 selected.available_quantity += item.quantity
                 selected.reserved_quantity = max(0, selected.reserved_quantity - item.quantity)
