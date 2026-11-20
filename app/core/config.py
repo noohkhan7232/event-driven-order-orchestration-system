@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     rabbitmq_default_user: str = "guest"
     rabbitmq_default_pass: str = "guest"
     log_level: str = "INFO"
+    metrics_token: str | None = None
 
     @model_validator(mode="after")
     def validate_production_secret(self) -> Self:
