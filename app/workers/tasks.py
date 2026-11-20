@@ -67,7 +67,9 @@ def _reserve_inventory(db, order: Order) -> None:
         order.status = OrderStatus.INVENTORY_RESERVED
         db.commit()
         publisher.publish(
-            DomainEvent(event_type=EventNames.INVENTORY_RESERVED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
+            DomainEvent(
+                event_type=EventNames.INVENTORY_RESERVED, aggregate_id=order.id, payload={"order_id": str(order.id)}
+            ),
             queue="payments",
         )
     except Exception as exc:
@@ -88,7 +90,9 @@ def _authorize_payment(db, order: Order) -> None:
         order.status = OrderStatus.PAID
         db.commit()
         publisher.publish(
-            DomainEvent(event_type=EventNames.PAYMENT_AUTHORIZED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
+            DomainEvent(
+                event_type=EventNames.PAYMENT_AUTHORIZED, aggregate_id=order.id, payload={"order_id": str(order.id)}
+            ),
             queue="shipments",
         )
     else:
@@ -96,7 +100,9 @@ def _authorize_payment(db, order: Order) -> None:
         order.status = OrderStatus.FAILED
         db.commit()
         publisher.publish(
-            DomainEvent(event_type=EventNames.PAYMENT_FAILED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
+            DomainEvent(
+                event_type=EventNames.PAYMENT_FAILED, aggregate_id=order.id, payload={"order_id": str(order.id)}
+            ),
             queue="dead_letter",
         )
 

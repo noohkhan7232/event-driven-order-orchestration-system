@@ -25,7 +25,9 @@ class OrderService:
 
         # Demo pricing is intentionally deterministic; real pricing would call catalog/pricing services.
         items = [
-            OrderItem(sku=item.sku, product_name="Pending catalog lookup", quantity=item.quantity, unit_price=Decimal("49.99"))
+            OrderItem(
+                sku=item.sku, product_name="Pending catalog lookup", quantity=item.quantity, unit_price=Decimal("49.99")
+            )
             for item in payload.items
         ]
         total = sum((item.unit_price * item.quantity for item in items), Decimal("0.00"))
@@ -38,10 +40,14 @@ class OrderService:
             items=items,
         )
         self.orders.add(order)
-        self.db.add(AuditLog(actor_id=customer.id, entity_type="order", entity_id=order.id, action="order_created", payload={}))
+        self.db.add(
+            AuditLog(actor_id=customer.id, entity_type="order", entity_id=order.id, action="order_created", payload={})
+        )
         self.db.commit()
         self.publisher.publish(
-            DomainEvent(event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
+            DomainEvent(
+                event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, payload={"order_id": str(order.id)}
+            ),
             queue="orders",
         )
         return self.orders.get_with_details(order.id) or order
@@ -60,7 +66,9 @@ class OrderService:
             raise ConflictError("Shipped or delivered orders cannot be cancelled")
         order.status = OrderStatus.CANCELLED
         order.failure_reason = reason
-        self.db.add(AuditLog(actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={}))
+        self.db.add(
+            AuditLog(actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={})
+        )
         self.db.commit()
         self.publisher.publish(
             DomainEvent(event_type="order.cancelled", aggregate_id=order.id, payload={"order_id": str(order.id)}),

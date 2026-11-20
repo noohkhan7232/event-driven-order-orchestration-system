@@ -34,4 +34,6 @@ class PaymentService:
         for payment in order.payments:
             if payment.status == PaymentStatus.AUTHORIZED:
                 payment.status = PaymentStatus.REFUNDED
-                self.db.add(AuditLog(entity_type="payment", entity_id=payment.id, action="payment_refunded", payload={}))
+                self.db.add(
+                    AuditLog(entity_type="payment", entity_id=payment.id, action="payment_refunded", payload={})
+                )

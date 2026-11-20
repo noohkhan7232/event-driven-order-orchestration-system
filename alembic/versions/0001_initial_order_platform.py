@@ -8,8 +8,9 @@ Create Date: 2026-05-17
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0001_initial"
 down_revision: str | None = None
@@ -52,7 +53,23 @@ def upgrade() -> None:
     op.create_table(
         "orders",
         sa.Column("customer_id", uuid_type(), nullable=False),
-        sa.Column("status", sa.Enum("CREATED", "VALIDATED", "INVENTORY_RESERVED", "PAYMENT_PENDING", "PAID", "FULFILLMENT_REQUESTED", "SHIPPED", "DELIVERED", "CANCELLED", "FAILED", name="orderstatus"), nullable=False),
+        sa.Column(
+            "status",
+            sa.Enum(
+                "CREATED",
+                "VALIDATED",
+                "INVENTORY_RESERVED",
+                "PAYMENT_PENDING",
+                "PAID",
+                "FULFILLMENT_REQUESTED",
+                "SHIPPED",
+                "DELIVERED",
+                "CANCELLED",
+                "FAILED",
+                name="orderstatus",
+            ),
+            nullable=False,
+        ),
         sa.Column("idempotency_key", sa.String(120), nullable=False),
         sa.Column("total_amount", sa.Numeric(12, 2), nullable=False),
         sa.Column("currency", sa.String(3), nullable=False),
@@ -108,7 +125,11 @@ def upgrade() -> None:
         sa.Column("order_id", uuid_type(), nullable=False),
         sa.Column("provider", sa.String(60), nullable=False),
         sa.Column("provider_transaction_id", sa.String(120), nullable=True),
-        sa.Column("status", sa.Enum("INITIATED", "AUTHORIZED", "CAPTURED", "FAILED", "REFUNDED", name="paymentstatus"), nullable=False),
+        sa.Column(
+            "status",
+            sa.Enum("INITIATED", "AUTHORIZED", "CAPTURED", "FAILED", "REFUNDED", name="paymentstatus"),
+            nullable=False,
+        ),
         sa.Column("amount", sa.Numeric(12, 2), nullable=False),
         sa.Column("failure_code", sa.String(80), nullable=True),
         sa.Column("id", uuid_type(), nullable=False),
@@ -125,7 +146,11 @@ def upgrade() -> None:
         sa.Column("order_id", uuid_type(), nullable=False),
         sa.Column("carrier", sa.String(80), nullable=False),
         sa.Column("tracking_number", sa.String(120), nullable=True),
-        sa.Column("status", sa.Enum("PENDING", "CREATED", "IN_TRANSIT", "DELAYED", "DELIVERED", "CANCELLED", name="shipmentstatus"), nullable=False),
+        sa.Column(
+            "status",
+            sa.Enum("PENDING", "CREATED", "IN_TRANSIT", "DELAYED", "DELIVERED", "CANCELLED", name="shipmentstatus"),
+            nullable=False,
+        ),
         sa.Column("estimated_delivery_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("id", uuid_type(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
@@ -155,7 +180,9 @@ def upgrade() -> None:
         "failed_jobs",
         sa.Column("task_name", sa.String(160), nullable=False),
         sa.Column("queue_name", sa.String(80), nullable=False),
-        sa.Column("status", sa.Enum("QUEUED", "RUNNING", "RETRYING", "FAILED", "COMPLETED", name="jobstatus"), nullable=False),
+        sa.Column(
+            "status", sa.Enum("QUEUED", "RUNNING", "RETRYING", "FAILED", "COMPLETED", name="jobstatus"), nullable=False
+        ),
         sa.Column("payload", sa.JSON(), nullable=False),
         sa.Column("error_message", sa.Text(), nullable=False),
         sa.Column("retry_count", sa.Integer(), nullable=False),
@@ -169,7 +196,11 @@ def upgrade() -> None:
     op.create_table(
         "shipment_events",
         sa.Column("shipment_id", uuid_type(), nullable=False),
-        sa.Column("status", sa.Enum("PENDING", "CREATED", "IN_TRANSIT", "DELAYED", "DELIVERED", "CANCELLED", name="shipmentstatus"), nullable=False),
+        sa.Column(
+            "status",
+            sa.Enum("PENDING", "CREATED", "IN_TRANSIT", "DELAYED", "DELIVERED", "CANCELLED", name="shipmentstatus"),
+            nullable=False,
+        ),
         sa.Column("location", sa.String(160), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("id", uuid_type(), nullable=False),
