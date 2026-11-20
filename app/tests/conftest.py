@@ -6,9 +6,13 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test_order_processing.db")
+test_url = make_url(os.environ.get("TEST_DATABASE_URL", "sqlite:///./test_order_processing.db"))
+if test_url.get_backend_name() == "postgresql" and not (test_url.database or "").endswith("_test"):
+    raise RuntimeError("Refusing destructive tests: PostgreSQL database name must end in _test")
+os.environ.setdefault("DATABASE_URL", str(test_url.render_as_string(hide_password=False)))
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app.auth.security import hash_password  # noqa: E402
@@ -20,7 +24,11 @@ from app.models.entities import Inventory, Order, OrderItem, User, Warehouse  # 
 from app.models.enums import OrderStatus, UserRole  # noqa: E402
 from app.workers import tasks  # noqa: E402
 
-engine = create_engine("sqlite:///./test_order_processing.db", connect_args={"check_same_thread": False})
+engine = (
+    create_engine(test_url, connect_args={"check_same_thread": False})
+    if test_url.get_backend_name() == "sqlite"
+    else create_engine(test_url, pool_size=60, max_overflow=0)
+)
 TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
 
@@ -83,3 +91,12 @@ def workflow(db, monkeypatch):
     db.commit()
     monkeypatch.setattr(tasks, "SessionLocal", lambda: nullcontext(db))
     return order, stock
+
+
+def pytest_collection_modifyitems(items):
+    if engine.dialect.name != "postgresql":
+        for item in items:
+            if "postgres" in item.keywords:
+                item.add_marker(
+                    pytest.mark.skip(reason="Requires TEST_DATABASE_URL pointing to dedicated PostgreSQL *_test DB")
+                )

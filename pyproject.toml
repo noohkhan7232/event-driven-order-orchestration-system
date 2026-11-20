@@ -18,3 +18,6 @@ python_version = "3.12"
 files = ["app"]
 ignore_missing_imports = true
 check_untyped_defs = false
+
+[tool.coverage.run]
+omit = ["app/tests/*"]
