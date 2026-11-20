@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.auth.security import create_access_token, hash_password, verify_password
-from app.core.exceptions import ConflictError, AuthorizationError
+from app.core.exceptions import AuthorizationError, ConflictError
 from app.models.entities import User
 from app.repositories.users import UserRepository
 from app.schemas.auth import UserCreate

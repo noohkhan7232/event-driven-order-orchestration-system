@@ -1,15 +1,15 @@
+import uuid
 from datetime import datetime
 from decimal import Decimal
-import uuid
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     Numeric,
     String,
     Text,

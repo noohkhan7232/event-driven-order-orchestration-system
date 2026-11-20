@@ -1,5 +1,6 @@
-from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
+
+from pydantic import BaseModel, EmailStr, Field
 
 from app.models.enums import UserRole
 

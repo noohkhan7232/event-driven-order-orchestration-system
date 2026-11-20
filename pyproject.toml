@@ -1,0 +1,19 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["B008", "UP046"] # FastAPI dependency defaults are intentional.
+
+[tool.ruff.lint.per-file-ignores]
+"app/tests/*" = ["S101", "S105", "S106"]
+"app/schemas/auth.py" = ["S105"] # The bearer token type is a protocol constant.
+"scripts/seed_demo.py" = ["S106"] # Public local demo credentials.
+"app/core/config.py" = ["S105"] # Local defaults; production validation added separately.
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+ignore_missing_imports = true
+check_untyped_defs = false

@@ -1,0 +1,8 @@
+-r requirements.txt
+pytest==8.3.4
+pytest-asyncio==0.25.0
+pytest-cov==6.0.0
+factory-boy==3.3.1
+ruff==0.17.6
+mypy==2.4.1
+pre-commit==4.2.0

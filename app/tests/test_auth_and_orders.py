@@ -1,5 +1,6 @@
-from app.models.entities import Inventory, Warehouse
 from conftest import auth_header
+
+from app.models.entities import Inventory, Warehouse
 
 
 def test_signup_login_and_me(client):
