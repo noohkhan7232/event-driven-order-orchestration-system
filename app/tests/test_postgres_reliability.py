@@ -123,3 +123,18 @@ def test_postgres_two_relays_claim_disjoint_rows(db, monkeypatch):
     assert sum(counts) == len(sent) == len(set(sent)) == 12
     with engine.connect() as connection:
         assert len(connection.scalars(select(OutboxEvent.id).where(OutboxEvent.status == "published")).all()) == 12
+
+
+def test_postgres_inventory_check_constraints_are_enforced(db, workflow):
+    from sqlalchemy import inspect
+    from sqlalchemy.exc import IntegrityError
+
+    _, stock = workflow
+    checks = {row["name"] for row in inspect(engine).get_check_constraints("inventory")}
+    assert {"ck_inventory_available_non_negative", "ck_inventory_reserved_non_negative"} <= checks
+    for column in ["available_quantity", "reserved_quantity"]:
+        with pytest.raises(IntegrityError), db.begin_nested():
+            setattr(stock, column, -1)
+            db.flush()
+    db.refresh(stock)
+    assert stock.available_quantity == 10 and stock.reserved_quantity == 0

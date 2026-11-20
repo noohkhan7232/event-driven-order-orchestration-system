@@ -36,6 +36,7 @@ def test_business_failure_compensates_without_retry(db, workflow, monkeypatch, p
         consume(order, EventNames.PAYMENT_AUTHORIZED)
         assert db.query(Payment).one().status == PaymentStatus.REFUNDED
         assert db.query(AuditLog).filter_by(action="payment_refunded").count() == 1
+        assert db.query(AuditLog).filter_by(action="inventory_released").count() == 1
     assert order.status == OrderStatus.FAILED and order.failure_reason == reason
     assert stock.available_quantity == 10 and stock.reserved_quantity == 0
     assert db.query(Shipment).count() == 0

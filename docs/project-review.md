@@ -11,9 +11,9 @@
 ## Known limitations
 
 - Payment and shipping providers and pricing are simulated.
-- No transactional outbox: a database commit can succeed while event publication fails.
-- Event consumers are not yet idempotent; retries can duplicate side effects.
-- Inventory allocation has no row locking and can race across workers.
+- The transactional outbox retains delivery intents through broker outages. Delivery is at-least-once; processed-event markers and state guards protect database effects.
+- Processed-event markers have no retention policy yet, and manual replay does not resurrect terminal failed sagas.
+- PostgreSQL order-first and sorted inventory row locks protect allocation; SQLite does not provide equivalent concurrent-writer guarantees.
 - This is a modular monolith, not independently deployed microservices.
 - It is not multi-tenant and has no frontend.
 - The workers endpoint reports static configuration, not live worker health.
@@ -22,5 +22,5 @@
 
 ## Next steps
 
-Consider an outbox, consumer deduplication, concurrency controls and real provider adapters in later phases.
-See [the hardening report](reports/phase-0-1-report.md) for implemented changes and verification limits.
+Consider operational replay workflows, marker retention and real provider adapters in later phases.
+See [the reliability architecture and verification report](reports/phase-2-report.md) for the current design and evidence. The [Phase 0-1 report](reports/phase-0-1-report.md) remains historical.
