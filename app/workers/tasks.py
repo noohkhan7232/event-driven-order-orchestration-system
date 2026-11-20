@@ -60,7 +60,11 @@ class ResilientTask(Task):
 
 @celery_app.task(bind=True, base=ResilientTask, name="app.workers.tasks.process_event")
 def process_event(self, raw_event: dict) -> None:
-    event = DomainEvent.model_validate(raw_event)
+    try:
+        event = DomainEvent.model_validate(raw_event)
+    except Exception as exc:
+        logger.exception("unexpected_error", original_event=raw_event)
+        raise TransientError("Invalid domain event") from exc
     with SessionLocal() as db:
         try:
             # Global lock ordering: ORDER first, INVENTORY (SKU, warehouse_id) second.
