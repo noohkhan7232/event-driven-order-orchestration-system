@@ -35,13 +35,15 @@ This educational backend demonstrates the following patterns and their current l
 | Problem | How this project solves it |
 |---|---|
 | Duplicate order requests (retries, double-clicks) | Order creation requires an `Idempotency-Key`; scope and payload checks are described in the project review. Consumers are not yet idempotent. |
-| Slow, blocking order creation | The API only validates and persists the order intent, then publishes an event to RabbitMQ and returns immediately. All heavy work happens asynchronously. |
+| Slow, blocking order creation | The API commits the order and outbox intent together and returns 202; a relay publishes to RabbitMQ. All heavy work happens asynchronously. |
 | Multi-step workflows that can partially fail | Order → inventory reservation → payment authorization → shipment creation is broken into discrete steps, each independently retryable, with compensation logic (e.g., releasing reserved inventory if payment fails). |
-| Jobs that fail permanently | Failed tasks retry with backoff; if retries are exhausted, failure details are persisted in `failed_jobs`. Some business failure paths also publish dead-letter events; automatic DLQ routing is not guaranteed. |
+| Jobs that fail permanently | Failed tasks retry with backoff; if retries are exhausted, failure details are persisted in `failed_jobs`. Business failures compensate without retry. Exhausted technical failures retain their original event for service-level replay. |
 | "Is the system healthy?" | Health and metrics endpoints expose API state. The workers endpoint lists static queue and schedule configuration. |
 | Access control | JWT-based authentication with role separation between customer, vendor, and admin. |
 
 ## How It Works (Architecture)
+
+The current [reliability architecture and verification report](docs/reports/phase-2-report.md) documents the outbox, state machine, locking, retries, operations and real Docker experiments. The diagram below is the original workflow overview.
 
 ![Architecture Diagram](docs/assets/architecture.png)
 
@@ -279,7 +281,6 @@ An engineering self-review is available here: [`docs/project-review.md`](docs/pr
 
 ## Future Enhancements
 
-- Transactional outbox for stronger event publication guarantees
 - Split inventory/payment/shipping into independent services
 - Payment gateway adapter layer
 - OpenTelemetry traces across API and workers

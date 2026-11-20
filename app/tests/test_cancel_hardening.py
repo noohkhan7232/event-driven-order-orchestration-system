@@ -4,7 +4,7 @@ import pytest
 
 from app.core.exceptions import ConflictError
 from app.events.contracts import DomainEvent, EventNames
-from app.models.entities import AuditLog, Inventory, Order, OrderItem, Payment, User, Warehouse
+from app.models.entities import AuditLog, Inventory, Order, OrderItem, OutboxEvent, Payment, User, Warehouse
 from app.models.enums import OrderStatus, PaymentStatus, UserRole
 from app.services.inventory import InventoryService
 from app.services.orders import OrderService
@@ -13,8 +13,6 @@ from app.workers import tasks
 
 @pytest.fixture
 def order_stock(db, monkeypatch):
-    published = []
-    monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *a, **kw: published.append(kw))
     user = User(email="cancel@example.com", hashed_password="hash", full_name="Cancel User", role=UserRole.CUSTOMER)
     warehouse = Warehouse(code="WH", name="Warehouse", region="test")
     db.add_all([user, warehouse])
@@ -24,7 +22,7 @@ def order_stock(db, monkeypatch):
     order.items.append(OrderItem(sku="SKU", quantity=2, unit_price=10, product_name="Product"))
     db.add_all([stock, order])
     db.commit()
-    return order, stock, user, published
+    return order, stock, user, None
 
 
 def test_cancel_before_reserve_publishes_nothing(db, order_stock):
@@ -32,7 +30,7 @@ def test_cancel_before_reserve_publishes_nothing(db, order_stock):
     OrderService(db).cancel_order(order.id, user)
     assert stock.available_quantity == 10
     assert stock.reserved_quantity == 0
-    assert published == []
+    assert db.query(OutboxEvent).filter_by(event_type="order.cancelled").count() == 1
 
 
 def test_cancel_after_reserve_restores_once_and_double_cancel_is_noop(db, order_stock):
@@ -51,7 +49,7 @@ def test_cancel_after_reserve_restores_once_and_double_cancel_is_noop(db, order_
     assert stock.available_quantity == 10
     assert not order.inventory_reserved
     assert db.query(AuditLog).count() == count
-    assert published == []
+    assert db.query(OutboxEvent).filter_by(event_type="order.cancelled").count() == 1
 
 
 def test_cancel_refunds_authorized_payment_once(db, order_stock):
@@ -73,7 +71,7 @@ def test_cancel_terminal_order_conflicts(db, order_stock, status):
     db.commit()
     with pytest.raises(ConflictError):
         OrderService(db).cancel_order(order.id, user)
-    assert published == []
+    assert db.query(OutboxEvent).count() == 0
 
 
 @pytest.mark.parametrize(
@@ -99,6 +97,7 @@ def test_payment_failure_clears_inventory_reservation(db, order_stock, monkeypat
     InventoryService(db).reserve_for_order(order)
     db.commit()
     monkeypatch.setattr(tasks.PaymentService, "authorize", lambda *a: Payment(status=PaymentStatus.FAILED))
+    order.status = OrderStatus.INVENTORY_RESERVED
     tasks._authorize_payment(db, order)
     assert stock.available_quantity == 10
     assert stock.reserved_quantity == 0

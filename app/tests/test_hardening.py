@@ -1,6 +1,6 @@
 from conftest import auth_header
 
-from app.models.entities import Order
+from app.models.entities import Order, OutboxEvent
 from app.repositories.orders import OrderRepository
 
 
@@ -20,7 +20,6 @@ def post_order(client, headers, key="shared", quantity=1, currency="USD"):
 
 
 def test_customer_pagination_counts_all_matching_orders(client, db, monkeypatch):
-    monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *a, **kw: None)
     headers = auth_header(client, "a@example.com", "strong-password")
     other = auth_header(client, "b@example.com", "strong-password")
     for i in range(3):
@@ -33,7 +32,6 @@ def test_customer_pagination_counts_all_matching_orders(client, db, monkeypatch)
 
 
 def test_idempotency_is_customer_scoped(client, db, monkeypatch):
-    monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *a, **kw: None)
     a = auth_header(client, "a@example.com", "strong-password")
     b = auth_header(client, "b@example.com", "strong-password")
     first, second = post_order(client, a), post_order(client, b)
@@ -43,21 +41,17 @@ def test_idempotency_is_customer_scoped(client, db, monkeypatch):
 
 
 def test_idempotency_payload_conflict_and_replay(client, db, monkeypatch):
-    published = []
-    monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *a, **kw: published.append(kw))
     headers = auth_header(client, "a@example.com", "strong-password")
     first = post_order(client, headers)
     replay = post_order(client, headers, currency="usd")
     assert first.json()["id"] == replay.json()["id"]
-    assert len(published) == db.query(Order).count() == 1
+    assert db.query(OutboxEvent).count() == db.query(Order).count() == 1
     conflict = post_order(client, headers, quantity=2)
     assert conflict.status_code == 409
     assert conflict.json()["code"] == "idempotency_key_conflict"
 
 
-def test_idempotency_insert_race(client, monkeypatch):
-    published = []
-    monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *a, **kw: published.append(kw))
+def test_idempotency_insert_race(client, db, monkeypatch):
     headers = auth_header(client, "a@example.com", "strong-password")
     first = post_order(client, headers)
     original = OrderRepository.get_by_idempotency_key
@@ -72,7 +66,7 @@ def test_idempotency_insert_race(client, monkeypatch):
     replay = post_order(client, headers)
     assert replay.status_code == 202
     assert replay.json()["id"] == first.json()["id"]
-    assert len(published) == 1
+    assert db.query(OutboxEvent).count() == 1
 
 
 def test_signup_ignores_privileged_role(client):

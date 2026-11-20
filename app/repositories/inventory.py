@@ -16,3 +16,14 @@ class InventoryRepository(Repository[Inventory]):
                 .with_for_update()
             ).all()
         )
+
+    def lock_skus(self, skus: set[str]) -> list[Inventory]:
+        return list(
+            self.db.scalars(
+                select(Inventory)
+                .where(Inventory.sku.in_(skus))
+                .order_by(Inventory.sku, Inventory.warehouse_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )

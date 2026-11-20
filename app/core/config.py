@@ -23,9 +23,18 @@ class Settings(BaseSettings):
     rabbitmq_default_pass: str = "guest"
     log_level: str = "INFO"
     metrics_token: str | None = None
+    outbox_max_attempts: int = Field(default=10, ge=1)
+    outbox_poll_interval_seconds: float = Field(default=0.5, gt=0)
+    outbox_retention_days: int = Field(default=7, ge=1)
+    task_max_retries: int = Field(default=3, ge=0)
+    task_retry_backoff_max: int = Field(default=60, ge=1)
+    failure_injection_enabled: bool = False
+    failure_transient_attempts: int = Field(default=2, ge=0)
 
     @model_validator(mode="after")
     def validate_production_secret(self) -> Self:
+        if self.failure_injection_enabled and self.environment not in {"local", "development", "test"}:
+            raise ValueError("Failure injection is forbidden outside local/development/test")
         if self.environment not in {"local", "development", "test"} and (
             self.secret_key in {"change-me", "change-me-in-production"} or len(self.secret_key) < 32
         ):

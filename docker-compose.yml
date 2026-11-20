@@ -1,39 +1,58 @@
+x-ready: &ready
+  migrate:
+    condition: service_completed_successfully
+  postgres:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+  redis:
+    condition: service_started
+
+x-application: &application
+  build: .
+  env_file: .env.example
+  environment:
+    FAILURE_INJECTION_ENABLED: ${FAILURE_INJECTION_ENABLED:-false}
+  volumes:
+    - .:/app
+  depends_on: *ready
+
 services:
-  api:
+  migrate:
     build: .
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: alembic upgrade head
     env_file: .env.example
-    ports:
-      - "8000:8000"
     volumes:
       - .:/app
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
-      rabbitmq:
-        condition: service_healthy
+
+  api:
+    <<: *application
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "${API_PORT:-8000}:8000"
 
   worker:
-    build: .
+    <<: *application
     command: celery -A app.workers.celery_app worker --loglevel=INFO --queues=orders,inventory,payments,shipments,dead_letter
-    env_file: .env.example
-    volumes:
-      - .:/app
     depends_on:
-      - api
-      - rabbitmq
-      - redis
+      <<: *ready
+      api:
+        condition: service_started
 
   scheduler:
-    build: .
+    <<: *application
     command: celery -A app.workers.celery_app beat --loglevel=INFO
-    env_file: .env.example
-    volumes:
-      - .:/app
     depends_on:
-      - worker
+      <<: *ready
+      worker:
+        condition: service_started
+
+  outbox-relay:
+    <<: *application
+    command: python -m app.workers.outbox_relay
 
   postgres:
     image: postgres:16-alpine

@@ -1,6 +1,6 @@
 from conftest import auth_header
 
-from app.models.entities import Inventory, Warehouse
+from app.models.entities import Inventory, OutboxEvent, Warehouse
 
 
 def test_signup_login_and_me(client):
@@ -20,10 +20,6 @@ def test_signup_login_and_me(client):
 
 
 def test_create_order_is_idempotent(client, db, monkeypatch):
-    published = []
-    monkeypatch.setattr(
-        "app.events.publisher.celery_app.send_task", lambda *args, **kwargs: published.append((args, kwargs))
-    )
 
     warehouse = Warehouse(code="DFW-01", name="Dallas Fulfillment", region="south")
     db.add(warehouse)
@@ -43,4 +39,4 @@ def test_create_order_is_idempotent(client, db, monkeypatch):
     assert first.status_code == 202
     assert second.status_code == 202
     assert first.json()["id"] == second.json()["id"]
-    assert len(published) == 1
+    assert db.query(OutboxEvent).count() == 1

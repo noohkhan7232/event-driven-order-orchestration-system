@@ -43,3 +43,4 @@ class JobStatus(StrEnum):
     RETRYING = "retrying"
     FAILED = "failed"
     COMPLETED = "completed"
+    REPLAYED = "replayed"

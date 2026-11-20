@@ -6,3 +6,6 @@ REQUEST_LATENCY = Histogram("http_request_duration_seconds", "HTTP request durat
 
 def metrics_response() -> bytes:
     return generate_latest()
+
+
+DUPLICATE_EVENTS = Counter("duplicate_events_skipped_total", "Duplicate consumer deliveries skipped")

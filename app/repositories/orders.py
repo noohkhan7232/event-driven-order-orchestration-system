@@ -10,12 +10,15 @@ from app.repositories.base import Repository
 class OrderRepository(Repository[Order]):
     model = Order
 
-    def get_with_details(self, order_id: UUID) -> Order | None:
-        return self.db.scalar(
+    def get_with_details(self, order_id: UUID, *, for_update: bool = False) -> Order | None:
+        statement = (
             select(Order)
             .where(Order.id == order_id)
             .options(selectinload(Order.items), selectinload(Order.payments), selectinload(Order.shipments))
         )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        return self.db.scalar(statement)
 
     def get_by_idempotency_key(self, customer_id: UUID, key: str) -> Order | None:
         return self.db.scalar(

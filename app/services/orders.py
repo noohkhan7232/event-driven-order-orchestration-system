@@ -5,23 +5,26 @@ from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from structlog.contextvars import get_contextvars
 
 from app.core.exceptions import ConflictError, IdempotencyConflictError, NotFoundError
+from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
-from app.events.publisher import EventPublisher
 from app.models.entities import AuditLog, Order, OrderItem, User
 from app.models.enums import OrderStatus, UserRole
 from app.repositories.orders import OrderRepository
+from app.repositories.outbox import OutboxRepository
 from app.schemas.orders import OrderCreate, OrderItemCreate
 from app.services.inventory import InventoryService
 from app.services.payments import PaymentService
+from app.services.shipping import ShippingService
 
 
 class OrderService:
     def __init__(self, db: Session):
         self.db = db
         self.orders = OrderRepository(db)
-        self.publisher = EventPublisher()
+        self.outbox = OutboxRepository(db)
 
     def create_order(self, customer: User, payload: OrderCreate, idempotency_key: str) -> Order:
         request_hash = self._request_hash(payload)
@@ -54,6 +57,15 @@ class OrderService:
                     actor_id=customer_id, entity_type="order", entity_id=order.id, action="order_created", payload={}
                 )
             )
+            self.outbox.add(
+                DomainEvent(
+                    event_type=EventNames.ORDER_CREATED,
+                    aggregate_id=order.id,
+                    payload={"order_id": str(order.id)},
+                    correlation_id=get_contextvars().get("request_id"),
+                ),
+                "orders",
+            )
             self.db.commit()
         except IntegrityError:
             self.db.rollback()
@@ -61,12 +73,9 @@ class OrderService:
             if existing is None:
                 raise
             return self._check_replay(existing, request_hash)
-        self.publisher.publish(
-            DomainEvent(
-                event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, payload={"order_id": str(order.id)}
-            ),
-            queue="orders",
-        )
+        except Exception:
+            self.db.rollback()
+            raise
         return self.orders.get_with_details(order.id) or order
 
     @staticmethod
@@ -88,8 +97,8 @@ class OrderService:
             raise IdempotencyConflictError("This idempotency key was already used with a different payload")
         return order
 
-    def get_order(self, order_id: UUID, user: User) -> Order:
-        order = self.orders.get_with_details(order_id)
+    def get_order(self, order_id: UUID, user: User, *, for_update: bool = False) -> Order:
+        order = self.orders.get_with_details(order_id, for_update=for_update)
         if not order:
             raise NotFoundError("Order not found")
         if user.role == UserRole.CUSTOMER and order.customer_id != user.id:
@@ -97,17 +106,33 @@ class OrderService:
         return order
 
     def cancel_order(self, order_id: UUID, user: User, reason: str | None = None) -> Order:
-        order = self.get_order(order_id, user)
-        if order.status == OrderStatus.CANCELLED:
-            return order
-        if order.status in {OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.FAILED}:
-            raise ConflictError("Terminal orders cannot be cancelled")
-        InventoryService(self.db).release_for_order(order)
-        PaymentService(self.db).refund(order)
-        order.status = OrderStatus.CANCELLED
-        order.failure_reason = reason
-        self.db.add(
-            AuditLog(actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={})
-        )
-        self.db.commit()
-        return self.orders.get_with_details(order.id) or order
+        try:
+            order = self.get_order(order_id, user, for_update=True)
+            if order.status == OrderStatus.CANCELLED:
+                self.db.commit()
+                return order
+            if order.status in {OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.FAILED}:
+                raise ConflictError("Terminal orders cannot be cancelled")
+            InventoryService(self.db).release_for_order(order)
+            PaymentService(self.db).refund(order)
+            ShippingService(self.db).cancel_for_order(order)
+            transition(order, OrderStatus.CANCELLED, db=self.db, reason=reason, actor=user.id)
+            self.db.add(
+                AuditLog(
+                    actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={}
+                )
+            )
+            self.outbox.add(
+                DomainEvent(
+                    event_type="order.cancelled",
+                    aggregate_id=order.id,
+                    payload={"order_id": str(order.id)},
+                    correlation_id=get_contextvars().get("request_id"),
+                ),
+                "orders",
+            )
+            self.db.commit()
+            return self.orders.get_with_details(order.id) or order
+        except Exception:
+            self.db.rollback()
+            raise

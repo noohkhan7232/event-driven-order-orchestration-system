@@ -1,4 +1,5 @@
 from app.auth.security import hash_password
+from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models.entities import Inventory, User, Warehouse
 from app.models.enums import UserRole
@@ -38,11 +39,22 @@ def main() -> None:
             warehouse = Warehouse(code="DFW-01", name="Dallas Fulfillment Center", region="south")
             db.add(warehouse)
             db.flush()
-        for sku, name, quantity in [
+        products = [
             ("SKU-HEADPHONES", "Noise Cancelling Headphones", 250),
             ("SKU-KEYBOARD", "Mechanical Keyboard", 160),
             ("SKU-DOCK", "USB-C Docking Station", 75),
-        ]:
+        ]
+        if get_settings().failure_injection_enabled:
+            products += [
+                (sku, "Failure injection demo", 100)
+                for sku in [
+                    "FAIL-PAYMENT-DEMO",
+                    "FAIL-SHIPMENT-DEMO",
+                    "FAIL-TRANSIENT-DEMO",
+                    "FAIL-TRANSIENT-EXHAUST-DEMO",
+                ]
+            ]
+        for sku, name, quantity in products:
             if not db.query(Inventory).filter_by(sku=sku, warehouse_id=warehouse.id).first():
                 db.add(
                     Inventory(
