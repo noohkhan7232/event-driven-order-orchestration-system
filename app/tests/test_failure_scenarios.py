@@ -102,7 +102,12 @@ def test_exhaustion_persists_full_event_compensates_and_replay_is_once(db, workf
 def test_signup_duplicate_insert_race_is_conflict(client, monkeypatch):
     from app.repositories.users import UserRepository
 
-    payload = {"email": "race@example.com", "password": "strong-password", "full_name": "Race User"}
+    payload = {
+        "tenant_slug": "default",
+        "email": "race@example.com",
+        "password": "strong-password",
+        "full_name": "Race User",
+    }
     assert client.post("/api/v1/auth/signup", json=payload).status_code == 201
     monkeypatch.setattr(UserRepository, "get_by_email", lambda *a: None)
     assert client.post("/api/v1/auth/signup", json=payload).status_code == 409

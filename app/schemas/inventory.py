@@ -27,3 +27,8 @@ class InventoryRead(BaseModel):
     low_stock_threshold: int
 
     model_config = {"from_attributes": True}
+
+
+class InventoryUpdate(BaseModel):
+    available_quantity: int | None = Field(default=None, ge=0)
+    low_stock_threshold: int | None = Field(default=None, ge=0)

@@ -17,11 +17,15 @@ class AuthService:
 
     def register(self, payload: UserCreate) -> User:
         email = payload.email.lower()
-        if self.users.get_by_email(email):
-            raise ConflictError("A user with this email already exists")
-        tenant = self.db.scalar(select(Tenant).where(Tenant.slug == "default"))
+        tenant = self.db.scalar(select(Tenant).where(Tenant.slug == payload.tenant_slug))
         if tenant is None:
             raise NotFoundError("Store not found")
+        if tenant.status == "suspended":
+            from app.auth.principal import TenantSuspended
+
+            raise TenantSuspended("Tenant access is suspended")
+        if self.users.get_by_email(email):
+            raise ConflictError("A user with this email already exists")
         user = User(
             tenant_id=tenant.id,
             email=email,
@@ -41,4 +45,6 @@ class AuthService:
         user = self.users.get_by_email(email.lower())
         if not user or not verify_password(password, user.hashed_password):
             raise AuthorizationError("Invalid email or password")
-        return create_access_token(str(user.id), {"role": user.role.value})
+        return create_access_token(
+            str(user.id), {"role": user.role.value, "tid": str(user.tenant_id) if user.tenant_id else None}
+        )

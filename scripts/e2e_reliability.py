@@ -64,7 +64,9 @@ class Harness:
                 pass
             time.sleep(0.5)
         credentials = {"email": f"e2e-{self.run_id}@example.com", "password": "e2e-demo-password"}
-        response = self.client.post("/api/v1/auth/signup", json={**credentials, "full_name": "E2E Reviewer"})
+        response = self.client.post(
+            "/api/v1/auth/signup", json={**credentials, "full_name": "E2E Reviewer", "tenant_slug": "default"}
+        )
         assert response.status_code == 201, response.text
         login = self.client.post("/api/v1/auth/login", json=credentials)
         assert login.status_code == 200, login.text

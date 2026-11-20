@@ -1,37 +1,50 @@
-from fastapi import APIRouter, Depends, Query, status
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import require_roles
+from app.auth.principal import Principal, get_principal
+from app.core.exceptions import AuthorizationError, NotFoundError
 from app.db.session import get_db
-from app.models.entities import Inventory, User, Warehouse
-from app.models.enums import UserRole
+from app.models.entities import Inventory, Warehouse
 from app.repositories.inventory import InventoryRepository
 from app.schemas.common import Page
-from app.schemas.inventory import InventoryCreate, InventoryRead, WarehouseCreate
+from app.schemas.inventory import InventoryCreate, InventoryRead, InventoryUpdate, WarehouseCreate
 
 router = APIRouter()
 
 
-@router.post("/warehouses", status_code=status.HTTP_201_CREATED)
+def tenant_scope(principal: Principal, scope: str) -> UUID:
+    principal.require(scope)
+    if principal.tenant_id is None:
+        raise AuthorizationError("Tenant principal required")
+    return principal.tenant_id
+
+
+@router.post("/warehouses", status_code=201)
 def create_warehouse(
-    payload: WarehouseCreate,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.VENDOR)),
+    payload: WarehouseCreate, db: Session = Depends(get_db), principal: Principal = Depends(get_principal)
 ):
-    warehouse = Warehouse(tenant_id=_.tenant_id, **payload.model_dump())
+    tenant_id = tenant_scope(principal, "inventory:write")
+    warehouse = Warehouse(tenant_id=tenant_id, **payload.model_dump())
     db.add(warehouse)
     db.commit()
     db.refresh(warehouse)
     return warehouse
 
 
-@router.post("", response_model=InventoryRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=InventoryRead, status_code=201)
 def create_inventory(
-    payload: InventoryCreate,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.VENDOR)),
+    payload: InventoryCreate, db: Session = Depends(get_db), principal: Principal = Depends(get_principal)
 ):
-    item = Inventory(tenant_id=_.tenant_id, **payload.model_dump())
+    warehouse = db.scalar(
+        select(Warehouse).where(Warehouse.id == payload.warehouse_id, Warehouse.tenant_id == principal.tenant_id)
+    )
+    if warehouse is None:
+        raise NotFoundError("Warehouse not found")
+    tenant_id = tenant_scope(principal, "inventory:write")
+    item = Inventory(tenant_id=tenant_id, **payload.model_dump())
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -43,16 +56,44 @@ def list_inventory(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.VENDOR)),
+    principal: Principal = Depends(get_principal),
 ):
-    items, total = InventoryRepository(db).list(limit, offset)
+    tenant_id = tenant_scope(principal, "inventory:read")
+    items, total = InventoryRepository(db).list_for_tenant(tenant_id, limit, offset)
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/low-stock", response_model=list[InventoryRead])
-def low_stock(
+def low_stock(db: Session = Depends(get_db), principal: Principal = Depends(get_principal)):
+    tenant_id = tenant_scope(principal, "inventory:read")
+    rows, _ = InventoryRepository(db).list_for_tenant(tenant_id, 100, 0, low_stock=True)
+    return rows
+
+
+def scoped_inventory(db: Session, principal: Principal, inventory_id: UUID) -> Inventory:
+    item = db.scalar(select(Inventory).where(Inventory.id == inventory_id, Inventory.tenant_id == principal.tenant_id))
+    if item is None:
+        raise NotFoundError("Inventory item not found")
+    return item
+
+
+@router.get("/{inventory_id}", response_model=InventoryRead)
+def get_inventory(inventory_id: UUID, db: Session = Depends(get_db), principal: Principal = Depends(get_principal)):
+    item = scoped_inventory(db, principal, inventory_id)
+    principal.require("inventory:read")
+    return item
+
+
+@router.patch("/{inventory_id}", response_model=InventoryRead)
+def update_inventory(
+    inventory_id: UUID,
+    payload: InventoryUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.ADMIN, UserRole.VENDOR)),
+    principal: Principal = Depends(get_principal),
 ):
-    rows, total = InventoryRepository(db).list(limit=100, offset=0)
-    return [row for row in rows if row.available_quantity <= row.low_stock_threshold]
+    item = scoped_inventory(db, principal, inventory_id)
+    principal.require("inventory:write")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(item, key, value)
+    db.commit()
+    return item

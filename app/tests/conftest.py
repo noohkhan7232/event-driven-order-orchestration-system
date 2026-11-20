@@ -66,7 +66,7 @@ def client(db: Session):
 
 
 def auth_header(client: TestClient, email: str, password: str, role: str = "customer") -> dict[str, str]:
-    payload = {"email": email, "password": password, "full_name": "Test User", "role": role}
+    payload = {"tenant_slug": "default", "email": email, "password": password, "full_name": "Test User", "role": role}
     if role == "customer":
         client.post("/api/v1/auth/signup", json=payload)
     else:

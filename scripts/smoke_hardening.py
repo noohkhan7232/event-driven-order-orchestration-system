@@ -58,7 +58,10 @@ def main() -> None:
                     return response
 
                 credentials = {"email": "smoke@example.com", "password": "smoke-password"}
-                signup = call("/api/v1/auth/signup", {**credentials, "full_name": "Smoke User", "role": "admin"})
+                signup = call(
+                    "/api/v1/auth/signup",
+                    {**credentials, "full_name": "Smoke User", "tenant_slug": "default", "role": "admin"},
+                )
                 assert signup.status_code == 201 and signup.json()["role"] == "customer"
                 login = call("/api/v1/auth/login", credentials)
                 assert login.status_code == 200

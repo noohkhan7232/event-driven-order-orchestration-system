@@ -144,3 +144,62 @@ def test_postgres_inventory_check_constraints_are_enforced(db, workflow):
             db.flush()
     db.refresh(stock)
     assert stock.available_quantity == 10 and stock.reserved_quantity == 0
+
+
+def test_postgres_two_tenants_same_sku_have_independent_stock(db, monkeypatch):
+    from app.models.entities import Inventory, Tenant, User, Warehouse
+    from app.models.enums import UserRole
+
+    tenants = [Tenant(name=f"Store {i}", slug=f"concurrent-{i}") for i in range(2)]
+    db.add_all(tenants)
+    db.flush()
+    stocks, events = [], []
+    for index, tenant in enumerate(tenants):
+        user = User(
+            tenant_id=tenant.id,
+            email=f"parallel-{index}@example.com",
+            full_name="User",
+            hashed_password="hash",
+            role=UserRole.CUSTOMER,
+        )
+        warehouse = Warehouse(tenant_id=tenant.id, code="SAME", name="Warehouse", region="test")
+        db.add_all([user, warehouse])
+        db.flush()
+        stock = Inventory(
+            tenant_id=tenant.id, sku="SHARED", product_name="Snapshot", warehouse_id=warehouse.id, available_quantity=2
+        )
+        db.add(stock)
+        stocks.append(stock)
+        for attempt in range(4):
+            order = Order(
+                tenant_id=tenant.id,
+                principal_scope=f"user:{user.id}",
+                customer_id=user.id,
+                idempotency_key=f"same-{attempt}",
+                status=OrderStatus.CREATED,
+            )
+            order.items.append(OrderItem(sku="SHARED", product_name="Snapshot", quantity=1, unit_price=10))
+            db.add(order)
+            db.flush()
+            events.append(
+                DomainEvent(
+                    event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, tenant_id=tenant.id, payload={}
+                ).model_dump(mode="json")
+            )
+    db.commit()
+    monkeypatch.setattr(tasks, "SessionLocal", TestingSessionLocal)
+    gate = Barrier(8)
+
+    def process(event):
+        gate.wait(timeout=30)
+        tasks.process_event.run(event)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(process, events))
+    db.expire_all()
+    for tenant, stock in zip(tenants, stocks, strict=True):
+        assert stock.available_quantity == 0 and stock.reserved_quantity == 2
+        assert db.query(Order).filter_by(tenant_id=tenant.id, status=OrderStatus.INVENTORY_RESERVED).count() == 2
+        assert db.query(Order).filter_by(tenant_id=tenant.id, status=OrderStatus.FAILED).count() == 2
+        rows = db.query(OutboxEvent).filter_by(tenant_id=tenant.id).all()
+        assert len(rows) == 4 and all(row.payload["tenant_id"] == str(tenant.id) for row in rows)

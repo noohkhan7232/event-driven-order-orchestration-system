@@ -14,13 +14,13 @@ from app.middleware.request_context import RequestContextMiddleware
 @pytest.mark.parametrize(
     "environment,token,authorization,expected",
     [
-        ("local", None, None, 200),
-        ("development", None, None, 200),
-        ("test", None, None, 200),
-        ("production", None, None, 404),
-        ("production", "metrics-secret", None, 403),
-        ("production", "metrics-secret", "Bearer wrong", 403),
-        ("production", "metrics-secret", "Basic metrics-secret", 403),
+        ("local", None, None, 401),
+        ("development", None, None, 401),
+        ("test", None, None, 401),
+        ("production", None, None, 401),
+        ("production", "metrics-secret", None, 401),
+        ("production", "metrics-secret", "Bearer wrong", 401),
+        ("production", "metrics-secret", "Basic metrics-secret", 401),
         ("production", "metrics-secret", "Bearer metrics-secret", 200),
     ],
 )
@@ -31,7 +31,7 @@ def test_metrics_access(client, environment, token, authorization, expected):
     assert client.get("/api/v1/system/metrics", headers=headers).status_code == expected
 
 
-@pytest.mark.parametrize("role,expected", [("admin", 200), ("vendor", 403), ("customer", 403)])
+@pytest.mark.parametrize("role,expected", [("admin", 403), ("vendor", 403), ("customer", 403)])
 def test_metrics_admin_jwt(client, role, expected):
     headers = auth_header(client, f"{role}@example.com", "strong-password", role)
     app.dependency_overrides[get_settings] = lambda: get_settings().model_copy(

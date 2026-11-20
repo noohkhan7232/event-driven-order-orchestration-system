@@ -6,7 +6,12 @@ from app.models.entities import Inventory, OutboxEvent, Warehouse
 def test_signup_login_and_me(client):
     response = client.post(
         "/api/v1/auth/signup",
-        json={"email": "customer@example.com", "password": "strong-password", "full_name": "Customer One"},
+        json={
+            "tenant_slug": "default",
+            "email": "customer@example.com",
+            "password": "strong-password",
+            "full_name": "Customer One",
+        },
     )
     assert response.status_code == 201
 

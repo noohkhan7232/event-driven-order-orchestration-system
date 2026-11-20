@@ -3,10 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import get_current_user, require_roles
+from app.auth.principal import Principal, get_principal
 from app.db.session import get_db
-from app.models.entities import User
-from app.models.enums import UserRole
 from app.repositories.orders import OrderRepository
 from app.schemas.common import Page
 from app.schemas.orders import OrderCreate, OrderRead
@@ -20,13 +18,13 @@ def create_order(
     payload: OrderCreate,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles(UserRole.CUSTOMER, UserRole.ADMIN)),
+    user: Principal = Depends(get_principal),
 ):
     return OrderService(db).create_order(user, payload, idempotency_key)
 
 
 @router.get("/{order_id}", response_model=OrderRead)
-def get_order(order_id: UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def get_order(order_id: UUID, db: Session = Depends(get_db), user: Principal = Depends(get_principal)):
     return OrderService(db).get_order(order_id, user)
 
 
@@ -35,14 +33,17 @@ def list_orders(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(get_principal),
 ):
     repo = OrderRepository(db)
-    if user.role == UserRole.CUSTOMER:
-        items = repo.list_for_customer(user.id, limit, offset)
-        total = repo.count_for_customer(user.id)
-    else:
-        items, total = repo.list(limit, offset)
+    user.require("orders:read")
+    if user.tenant_id is None:
+        from app.core.exceptions import AuthorizationError
+
+        raise AuthorizationError("Tenant principal required")
+    items, total = repo.list_for_tenant(
+        user.tenant_id, limit, offset, user.user.id if user.is_customer and user.user else None
+    )
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -51,6 +52,6 @@ def cancel_order(
     order_id: UUID,
     reason: str | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: Principal = Depends(get_principal),
 ):
     return OrderService(db).cancel_order(order_id, user, reason)
