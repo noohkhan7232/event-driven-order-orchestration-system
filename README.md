@@ -271,7 +271,6 @@ See [`.env.example`](.env.example). Important values:
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND`
 - `SECRET_KEY`
-- `IDEMPOTENCY_TTL_SECONDS`
 
 ## Project Review
 

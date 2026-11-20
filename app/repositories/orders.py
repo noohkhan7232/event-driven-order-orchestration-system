@@ -17,10 +17,10 @@ class OrderRepository(Repository[Order]):
             .options(selectinload(Order.items), selectinload(Order.payments), selectinload(Order.shipments))
         )
 
-    def get_by_idempotency_key(self, key: str) -> Order | None:
+    def get_by_idempotency_key(self, customer_id: UUID, key: str) -> Order | None:
         return self.db.scalar(
             select(Order)
-            .where(Order.idempotency_key == key)
+            .where(Order.customer_id == customer_id, Order.idempotency_key == key)
             .options(selectinload(Order.items), selectinload(Order.payments), selectinload(Order.shipments))
         )
 

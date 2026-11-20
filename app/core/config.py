@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     rabbitmq_default_user: str = "guest"
     rabbitmq_default_pass: str = "guest"
     log_level: str = "INFO"
-    idempotency_ttl_seconds: int = 86400
 
 
 @lru_cache
