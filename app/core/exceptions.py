@@ -18,12 +18,24 @@ class ConflictError(DomainError):
     status_code = 409
 
 
+class BusinessError(ConflictError):
+    """Expected rejection; never retried by workers."""
+
+
+class InvalidTransitionError(BusinessError):
+    code = "invalid_order_transition"
+
+
+class TransientError(Exception):
+    """Technical failure whose whole transaction can be retried."""
+
+
 class AuthorizationError(DomainError):
     code = "forbidden"
     status_code = 403
 
 
-class InsufficientInventoryError(ConflictError):
+class InsufficientInventoryError(BusinessError):
     code = "insufficient_inventory"
 
 

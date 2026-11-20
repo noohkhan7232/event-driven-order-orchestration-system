@@ -99,6 +99,7 @@ def test_payment_failure_clears_inventory_reservation(db, order_stock, monkeypat
     InventoryService(db).reserve_for_order(order)
     db.commit()
     monkeypatch.setattr(tasks.PaymentService, "authorize", lambda *a: Payment(status=PaymentStatus.FAILED))
+    order.status = OrderStatus.INVENTORY_RESERVED
     tasks._authorize_payment(db, order)
     assert stock.available_quantity == 10
     assert stock.reserved_quantity == 0

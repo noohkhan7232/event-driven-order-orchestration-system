@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, IdempotencyConflictError, NotFoundError
+from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
 from app.events.publisher import EventPublisher
 from app.models.entities import AuditLog, Order, OrderItem, User
@@ -104,7 +105,7 @@ class OrderService:
             raise ConflictError("Terminal orders cannot be cancelled")
         InventoryService(self.db).release_for_order(order)
         PaymentService(self.db).refund(order)
-        order.status = OrderStatus.CANCELLED
+        transition(order, OrderStatus.CANCELLED, db=self.db)
         order.failure_reason = reason
         self.db.add(
             AuditLog(actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={})

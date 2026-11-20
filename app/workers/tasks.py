@@ -4,6 +4,7 @@ from celery import Task
 
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
+from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
 from app.events.publisher import EventPublisher
 from app.models.entities import FailedJob, Order
@@ -72,7 +73,7 @@ def process_event(self, raw_event: dict) -> None:
 def _reserve_inventory(db, order: Order) -> None:
     try:
         InventoryService(db).reserve_for_order(order)
-        order.status = OrderStatus.INVENTORY_RESERVED
+        transition(order, OrderStatus.INVENTORY_RESERVED, db=db)
         db.commit()
         publisher.publish(
             DomainEvent(
@@ -81,7 +82,7 @@ def _reserve_inventory(db, order: Order) -> None:
             queue="payments",
         )
     except Exception as exc:
-        order.status = OrderStatus.FAILED
+        transition(order, OrderStatus.FAILED, db=db)
         order.failure_reason = str(exc)
         db.commit()
         publisher.publish(
@@ -92,10 +93,10 @@ def _reserve_inventory(db, order: Order) -> None:
 
 
 def _authorize_payment(db, order: Order) -> None:
-    order.status = OrderStatus.PAYMENT_PENDING
+    transition(order, OrderStatus.PAYMENT_PENDING, db=db)
     payment = PaymentService(db).authorize(order)
     if payment.status == PaymentStatus.AUTHORIZED:
-        order.status = OrderStatus.PAID
+        transition(order, OrderStatus.PAID, db=db)
         db.commit()
         publisher.publish(
             DomainEvent(
@@ -105,7 +106,7 @@ def _authorize_payment(db, order: Order) -> None:
         )
     else:
         InventoryService(db).release_for_order(order)
-        order.status = OrderStatus.FAILED
+        transition(order, OrderStatus.FAILED, db=db)
         db.commit()
         publisher.publish(
             DomainEvent(
@@ -117,7 +118,7 @@ def _authorize_payment(db, order: Order) -> None:
 
 def _create_shipment(db, order: Order) -> None:
     ShippingService(db).create_shipment(order)
-    order.status = OrderStatus.FULFILLMENT_REQUESTED
+    transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db)
     db.commit()
     publisher.publish(
         DomainEvent(event_type=EventNames.SHIPMENT_CREATED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
