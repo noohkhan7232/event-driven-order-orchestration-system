@@ -22,7 +22,10 @@ TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=Fals
 
 
 @pytest.fixture(autouse=True)
-def reset_database():
+def reset_database(request):
+    if request.node.path.name == "test_order_state.py":
+        yield
+        return
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield

@@ -1,13 +1,15 @@
-from uuid import UUID
-
 from celery import Task
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.orm import Session
 
+from app.core.exceptions import BusinessError, InsufficientInventoryError, TransientError
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
-from app.models.entities import FailedJob, Order
+from app.models.entities import FailedJob, Order, ProcessedEvent
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus
+from app.observability.metrics import DUPLICATE_EVENTS
 from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.services.inventory import InventoryService
@@ -43,81 +45,97 @@ class ResilientTask(Task):
 @celery_app.task(bind=True, base=ResilientTask, name="app.workers.tasks.process_event")
 def process_event(self, raw_event: dict) -> None:
     event = DomainEvent.model_validate(raw_event)
-    logger.info("event_consumed", event_type=event.event_type, aggregate_id=str(event.aggregate_id))
     with SessionLocal() as db:
-        order = OrderRepository(db).get_with_details(UUID(str(event.aggregate_id)))
-        if not order:
-            logger.warning("order_missing_for_event", order_id=str(event.aggregate_id))
-            return
+        try:
+            # Global lock ordering: ORDER first, INVENTORY (SKU, warehouse_id) second.
+            order = OrderRepository(db).get_with_details(event.aggregate_id, for_update=True)
+            if not order:
+                logger.warning("order_missing_for_event", order_id=str(event.aggregate_id))
+                db.rollback()
+                return
+            # sqlite3 legacy transaction mode does not BEGIN for SELECT; without
+            # this a released SAVEPOINT could survive a later outer rollback.
+            if db.get_bind().dialect.name == "sqlite":
+                connection = db.connection()
+                if not getattr(connection.connection.driver_connection, "in_transaction", False):
+                    connection.exec_driver_sql("BEGIN")
+            try:
+                with db.begin_nested():
+                    db.add(ProcessedEvent(consumer="order_workflow", event_id=event.event_id))
+                    db.flush()
+            except IntegrityError:
+                DUPLICATE_EVENTS.inc()
+                logger.info("duplicate_event_skipped", event_id=str(event.event_id))
+                db.commit()
+                return
+            expected = {
+                EventNames.ORDER_CREATED: OrderStatus.CREATED,
+                EventNames.INVENTORY_RESERVED: OrderStatus.INVENTORY_RESERVED,
+                EventNames.PAYMENT_AUTHORIZED: OrderStatus.PAID,
+            }
+            if event.event_type in expected:
+                if order.status == OrderStatus.CANCELLED:
+                    logger.info("event_skipped_order_cancelled", event_id=str(event.event_id))
+                elif order.status != expected[event.event_type]:
+                    logger.info(
+                        "event_skipped_unexpected_state", event_id=str(event.event_id), state=order.status.value
+                    )
+                else:
+                    step = {
+                        EventNames.ORDER_CREATED: _reserve_inventory,
+                        EventNames.INVENTORY_RESERVED: _authorize_payment,
+                        EventNames.PAYMENT_AUTHORIZED: _create_shipment,
+                    }[event.event_type]
+                    step(db, order, event)
+            db.commit()
+        except (BusinessError, TransientError, OperationalError):
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
+            logger.exception("unexpected_error", event_id=str(event.event_id))
+            raise TransientError(str(exc)) from exc
 
-        if order.status == OrderStatus.CANCELLED and event.event_type in {
-            EventNames.ORDER_CREATED,
-            EventNames.INVENTORY_RESERVED,
-            EventNames.PAYMENT_AUTHORIZED,
-        }:
-            logger.info("event_skipped_order_cancelled", order_id=str(order.id), event_type=event.event_type)
-            return
 
-        if event.event_type == EventNames.ORDER_CREATED:
-            _reserve_inventory(db, order)
-        elif event.event_type == EventNames.INVENTORY_RESERVED:
-            _authorize_payment(db, order)
-        elif event.event_type == EventNames.PAYMENT_AUTHORIZED:
-            _create_shipment(db, order)
-        elif event.event_type == "order.cancelled":
-            InventoryService(db).release_for_order(order)
-        db.commit()
+def _emit(db: Session, order: Order, kind: str, queue: str, event: DomainEvent | None) -> None:
+    OutboxRepository(db).add(
+        DomainEvent(
+            event_type=kind,
+            aggregate_id=order.id,
+            payload={"order_id": str(order.id), "reason": order.failure_reason},
+            correlation_id=event.correlation_id if event else None,
+        ),
+        queue,
+    )
 
 
-def _reserve_inventory(db, order: Order) -> None:
+def _reserve_inventory(db: Session, order: Order, event: DomainEvent | None = None) -> None:
     try:
         InventoryService(db).reserve_for_order(order)
-        transition(order, OrderStatus.INVENTORY_RESERVED, db=db)
-        OutboxRepository(db).add(
-            DomainEvent(
-                event_type=EventNames.INVENTORY_RESERVED, aggregate_id=order.id, payload={"order_id": str(order.id)}
-            ),
-            queue="payments",
-        )
-    except Exception as exc:
-        transition(order, OrderStatus.FAILED, db=db)
-        order.failure_reason = str(exc)
-        OutboxRepository(db).add(
-            DomainEvent(event_type=EventNames.INVENTORY_FAILED, aggregate_id=order.id, payload={"error": str(exc)}),
-            queue="dead_letter",
-        )
-        raise
+    except InsufficientInventoryError:
+        transition(order, OrderStatus.FAILED, db=db, reason="INSUFFICIENT_INVENTORY")
+        _emit(db, order, EventNames.INVENTORY_FAILED, "inventory", event)
+        return
+    transition(order, OrderStatus.INVENTORY_RESERVED, db=db)
+    _emit(db, order, EventNames.INVENTORY_RESERVED, "payments", event)
 
 
-def _authorize_payment(db, order: Order) -> None:
+def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
     transition(order, OrderStatus.PAYMENT_PENDING, db=db)
     payment = PaymentService(db).authorize(order)
     if payment.status == PaymentStatus.AUTHORIZED:
         transition(order, OrderStatus.PAID, db=db)
-        OutboxRepository(db).add(
-            DomainEvent(
-                event_type=EventNames.PAYMENT_AUTHORIZED, aggregate_id=order.id, payload={"order_id": str(order.id)}
-            ),
-            queue="shipments",
-        )
+        _emit(db, order, EventNames.PAYMENT_AUTHORIZED, "shipments", event)
     else:
         InventoryService(db).release_for_order(order)
-        transition(order, OrderStatus.FAILED, db=db)
-        OutboxRepository(db).add(
-            DomainEvent(
-                event_type=EventNames.PAYMENT_FAILED, aggregate_id=order.id, payload={"order_id": str(order.id)}
-            ),
-            queue="dead_letter",
-        )
+        transition(order, OrderStatus.FAILED, db=db, reason="PAYMENT_DECLINED")
+        _emit(db, order, EventNames.PAYMENT_FAILED, "payments", event)
 
 
-def _create_shipment(db, order: Order) -> None:
+def _create_shipment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
     ShippingService(db).create_shipment(order)
     transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db)
-    OutboxRepository(db).add(
-        DomainEvent(event_type=EventNames.SHIPMENT_CREATED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
-        queue="shipments",
-    )
+    _emit(db, order, EventNames.SHIPMENT_CREATED, "shipments", event)
 
 
 @celery_app.task(name="app.workers.tasks.check_low_stock")
