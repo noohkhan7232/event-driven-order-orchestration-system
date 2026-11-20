@@ -1,3 +1,4 @@
+import re
 import time
 import uuid
 
@@ -10,7 +11,8 @@ from app.observability.metrics import REQUEST_COUNT, REQUEST_LATENCY
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
+        incoming = request.headers.get("x-request-id", "")
+        request_id = incoming if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", incoming) else str(uuid.uuid4())
         structlog.contextvars.bind_contextvars(request_id=request_id)
         start = time.perf_counter()
         request.state.request_id = request_id
