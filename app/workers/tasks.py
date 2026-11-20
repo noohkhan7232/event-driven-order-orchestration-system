@@ -2,6 +2,7 @@ from celery import Task
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.exceptions import BusinessError, InsufficientInventoryError, TransientError
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
@@ -12,6 +13,7 @@ from app.models.enums import JobStatus, OrderStatus, PaymentStatus
 from app.observability.metrics import DUPLICATE_EVENTS
 from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
+from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
 from app.services.payments import PaymentService
 from app.services.shipping import ShippingService
@@ -21,24 +23,38 @@ logger = get_logger(__name__)
 
 
 class ResilientTask(Task):
-    autoretry_for = (Exception,)
-    retry_kwargs = {"max_retries": 3, "countdown": 5}
+    autoretry_for = (TransientError, OperationalError, ConnectionError)
+    dont_autoretry_for = (BusinessError,)
+    retry_kwargs = {"max_retries": get_settings().task_max_retries}
+    retry_backoff_max = get_settings().task_retry_backoff_max
     retry_backoff = True
     retry_jitter = True
 
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
-        with SessionLocal() as db:
-            db.add(
-                FailedJob(
-                    task_name=self.name,
-                    queue_name=self.request.delivery_info.get("routing_key", "unknown"),
-                    status=JobStatus.FAILED,
-                    payload={"args": args, "kwargs": kwargs},
-                    error_message=str(exc),
-                    retry_count=self.request.retries,
-                )
-            )
-        db.commit()
+    def on_failure(self, exc: Exception, task_id: str, args: tuple, kwargs: dict, einfo: object) -> None:
+        raw = args[0] if args else kwargs.get("raw_event", {})
+        queue = (self.request.delivery_info or {}).get("routing_key", "orders")
+        try:
+            with SessionLocal() as db:
+                record_failure(db, raw, exc, self.request.retries, queue, self.name)
+        except Exception:
+            logger.exception("failure_compensation_error", task_id=task_id)
+            # Fallback preserves even malformed poison messages or compensation errors.
+            try:
+                with SessionLocal() as db:
+                    db.rollback()
+                    db.add(
+                        FailedJob(
+                            task_name=self.name,
+                            queue_name=queue,
+                            status=JobStatus.FAILED,
+                            payload=raw,
+                            error_message=str(exc),
+                            retry_count=self.request.retries,
+                        )
+                    )
+                    db.commit()
+            except Exception:
+                logger.exception("failed_job_persistence_error", task_id=task_id, original_event=raw)
         logger.error("task_failed", task=self.name, task_id=task_id, error=str(exc))
 
 
@@ -87,6 +103,20 @@ def process_event(self, raw_event: dict) -> None:
                         EventNames.PAYMENT_AUTHORIZED: _create_shipment,
                     }[event.event_type]
                     step(db, order, event)
+                    settings = get_settings()
+                    transient_items = [item for item in order.items if item.sku.startswith("FAIL-TRANSIENT-")]
+                    attempts = (
+                        settings.task_max_retries + 1
+                        if any("EXHAUST" in item.sku for item in transient_items)
+                        else settings.failure_transient_attempts
+                    )
+                    if (
+                        settings.failure_injection_enabled
+                        and transient_items
+                        and event.event_type == EventNames.ORDER_CREATED
+                        and self.request.retries < attempts
+                    ):
+                        raise TransientError("Injected transient failure after step effects")
             db.commit()
         except (BusinessError, TransientError, OperationalError):
             db.rollback()
@@ -122,7 +152,12 @@ def _reserve_inventory(db: Session, order: Order, event: DomainEvent | None = No
 
 def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
     transition(order, OrderStatus.PAYMENT_PENDING, db=db)
-    payment = PaymentService(db).authorize(order)
+    decline = get_settings().failure_injection_enabled and any(
+        item.sku.startswith("FAIL-PAYMENT-") for item in order.items
+    )
+    payment = (
+        PaymentService(db).authorize(order, simulate_failure=True) if decline else PaymentService(db).authorize(order)
+    )
     if payment.status == PaymentStatus.AUTHORIZED:
         transition(order, OrderStatus.PAID, db=db)
         _emit(db, order, EventNames.PAYMENT_AUTHORIZED, "shipments", event)
@@ -133,6 +168,12 @@ def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = No
 
 
 def _create_shipment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
+    if get_settings().failure_injection_enabled and any(item.sku.startswith("FAIL-SHIPMENT-") for item in order.items):
+        PaymentService(db).refund(order)
+        InventoryService(db).release_for_order(order)
+        transition(order, OrderStatus.FAILED, db=db, reason="SHIPMENT_FAILED")
+        _emit(db, order, "shipment.failed", "shipments", event)
+        return
     ShippingService(db).create_shipment(order)
     transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db)
     _emit(db, order, EventNames.SHIPMENT_CREATED, "shipments", event)

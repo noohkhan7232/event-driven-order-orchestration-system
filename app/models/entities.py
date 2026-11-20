@@ -157,7 +157,11 @@ class FailedJob(UUIDMixin, TimestampMixin, Base):
 
     task_name: Mapped[str] = mapped_column(String(160), nullable=False)
     queue_name: Mapped[str] = mapped_column(String(80), nullable=False)
-    status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.FAILED, nullable=False)
+    status: Mapped[JobStatus] = mapped_column(
+        Enum(JobStatus, native_enum=False, length=20), default=JobStatus.FAILED, nullable=False
+    )
+    event_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    aggregate_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     error_message: Mapped[str] = mapped_column(Text, nullable=False)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

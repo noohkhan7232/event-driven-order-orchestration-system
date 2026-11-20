@@ -1,3 +1,4 @@
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.security import create_access_token, hash_password, verify_password
@@ -23,8 +24,12 @@ class AuthService:
             full_name=payload.full_name,
             role=UserRole.CUSTOMER,
         )
-        self.users.add(user)
-        self.db.commit()
+        try:
+            self.users.add(user)
+            self.db.commit()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise ConflictError("A user with this email already exists") from exc
         return user
 
     def login(self, email: str, password: str) -> str:
