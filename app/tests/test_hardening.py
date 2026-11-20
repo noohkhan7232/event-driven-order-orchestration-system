@@ -19,6 +19,19 @@ def post_order(client, headers, key="shared", quantity=1, currency="USD"):
     )
 
 
+def test_customer_pagination_counts_all_matching_orders(client, db, monkeypatch):
+    monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *a, **kw: None)
+    headers = auth_header(client, "a@example.com", "strong-password")
+    other = auth_header(client, "b@example.com", "strong-password")
+    for i in range(3):
+        assert post_order(client, headers, key=str(i)).status_code == 202
+    post_order(client, other)
+    response = client.get("/api/v1/orders?limit=2&offset=1", headers=headers)
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 2
+    assert response.json()["total"] == 3
+
+
 def test_idempotency_is_customer_scoped(client, db, monkeypatch):
     monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *a, **kw: None)
     a = auth_header(client, "a@example.com", "strong-password")

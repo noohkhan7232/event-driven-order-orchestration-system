@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.models.entities import Order
@@ -35,3 +35,6 @@ class OrderRepository(Repository[Order]):
                 .options(selectinload(Order.items), selectinload(Order.payments), selectinload(Order.shipments))
             ).all()
         )
+
+    def count_for_customer(self, customer_id: UUID) -> int:
+        return self.db.scalar(select(func.count()).select_from(Order).where(Order.customer_id == customer_id)) or 0

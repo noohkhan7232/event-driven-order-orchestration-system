@@ -40,7 +40,7 @@ def list_orders(
     repo = OrderRepository(db)
     if user.role == UserRole.CUSTOMER:
         items = repo.list_for_customer(user.id, limit, offset)
-        total = len(items)
+        total = repo.count_for_customer(user.id)
     else:
         items, total = repo.list(limit, offset)
     return Page(items=items, total=total, limit=limit, offset=offset)
