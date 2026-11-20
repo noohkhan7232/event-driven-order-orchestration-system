@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,14 @@ class Settings(BaseSettings):
     rabbitmq_default_user: str = "guest"
     rabbitmq_default_pass: str = "guest"
     log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def validate_production_secret(self) -> Self:
+        if self.environment not in {"local", "development", "test"} and (
+            self.secret_key in {"change-me", "change-me-in-production"} or len(self.secret_key) < 32
+        ):
+            raise ValueError("Production secret_key must be at least 32 characters and not a known default")
+        return self
 
 
 @lru_cache
