@@ -16,6 +16,8 @@ dead_letter_exchange = Exchange("dead_letter", type="direct")
 domain_exchange = Exchange("domain_events", type="direct")
 
 celery_app.conf.update(
+    broker_transport_options={"confirm_publish": True},
+    task_default_delivery_mode="persistent",
     task_default_exchange="domain_events",
     task_default_exchange_type="direct",
     task_default_routing_key="orders",

@@ -6,17 +6,16 @@ from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
-from app.events.publisher import EventPublisher
 from app.models.entities import FailedJob, Order
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus
 from app.repositories.orders import OrderRepository
+from app.repositories.outbox import OutboxRepository
 from app.services.inventory import InventoryService
 from app.services.payments import PaymentService
 from app.services.shipping import ShippingService
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
-publisher = EventPublisher()
 
 
 class ResilientTask(Task):
@@ -37,7 +36,7 @@ class ResilientTask(Task):
                     retry_count=self.request.retries,
                 )
             )
-            db.commit()
+        db.commit()
         logger.error("task_failed", task=self.name, task_id=task_id, error=str(exc))
 
 
@@ -67,15 +66,14 @@ def process_event(self, raw_event: dict) -> None:
             _create_shipment(db, order)
         elif event.event_type == "order.cancelled":
             InventoryService(db).release_for_order(order)
-            db.commit()
+        db.commit()
 
 
 def _reserve_inventory(db, order: Order) -> None:
     try:
         InventoryService(db).reserve_for_order(order)
         transition(order, OrderStatus.INVENTORY_RESERVED, db=db)
-        db.commit()
-        publisher.publish(
+        OutboxRepository(db).add(
             DomainEvent(
                 event_type=EventNames.INVENTORY_RESERVED, aggregate_id=order.id, payload={"order_id": str(order.id)}
             ),
@@ -84,8 +82,7 @@ def _reserve_inventory(db, order: Order) -> None:
     except Exception as exc:
         transition(order, OrderStatus.FAILED, db=db)
         order.failure_reason = str(exc)
-        db.commit()
-        publisher.publish(
+        OutboxRepository(db).add(
             DomainEvent(event_type=EventNames.INVENTORY_FAILED, aggregate_id=order.id, payload={"error": str(exc)}),
             queue="dead_letter",
         )
@@ -97,8 +94,7 @@ def _authorize_payment(db, order: Order) -> None:
     payment = PaymentService(db).authorize(order)
     if payment.status == PaymentStatus.AUTHORIZED:
         transition(order, OrderStatus.PAID, db=db)
-        db.commit()
-        publisher.publish(
+        OutboxRepository(db).add(
             DomainEvent(
                 event_type=EventNames.PAYMENT_AUTHORIZED, aggregate_id=order.id, payload={"order_id": str(order.id)}
             ),
@@ -107,8 +103,7 @@ def _authorize_payment(db, order: Order) -> None:
     else:
         InventoryService(db).release_for_order(order)
         transition(order, OrderStatus.FAILED, db=db)
-        db.commit()
-        publisher.publish(
+        OutboxRepository(db).add(
             DomainEvent(
                 event_type=EventNames.PAYMENT_FAILED, aggregate_id=order.id, payload={"order_id": str(order.id)}
             ),
@@ -119,8 +114,7 @@ def _authorize_payment(db, order: Order) -> None:
 def _create_shipment(db, order: Order) -> None:
     ShippingService(db).create_shipment(order)
     transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db)
-    db.commit()
-    publisher.publish(
+    OutboxRepository(db).add(
         DomainEvent(event_type=EventNames.SHIPMENT_CREATED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
         queue="shipments",
     )

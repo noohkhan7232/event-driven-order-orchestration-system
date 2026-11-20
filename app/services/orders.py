@@ -5,14 +5,15 @@ from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from structlog.contextvars import get_contextvars
 
 from app.core.exceptions import ConflictError, IdempotencyConflictError, NotFoundError
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
-from app.events.publisher import EventPublisher
 from app.models.entities import AuditLog, Order, OrderItem, User
 from app.models.enums import OrderStatus, UserRole
 from app.repositories.orders import OrderRepository
+from app.repositories.outbox import OutboxRepository
 from app.schemas.orders import OrderCreate, OrderItemCreate
 from app.services.inventory import InventoryService
 from app.services.payments import PaymentService
@@ -22,7 +23,7 @@ class OrderService:
     def __init__(self, db: Session):
         self.db = db
         self.orders = OrderRepository(db)
-        self.publisher = EventPublisher()
+        self.outbox = OutboxRepository(db)
 
     def create_order(self, customer: User, payload: OrderCreate, idempotency_key: str) -> Order:
         request_hash = self._request_hash(payload)
@@ -55,6 +56,15 @@ class OrderService:
                     actor_id=customer_id, entity_type="order", entity_id=order.id, action="order_created", payload={}
                 )
             )
+            self.outbox.add(
+                DomainEvent(
+                    event_type=EventNames.ORDER_CREATED,
+                    aggregate_id=order.id,
+                    payload={"order_id": str(order.id)},
+                    correlation_id=get_contextvars().get("request_id"),
+                ),
+                "orders",
+            )
             self.db.commit()
         except IntegrityError:
             self.db.rollback()
@@ -62,12 +72,9 @@ class OrderService:
             if existing is None:
                 raise
             return self._check_replay(existing, request_hash)
-        self.publisher.publish(
-            DomainEvent(
-                event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, payload={"order_id": str(order.id)}
-            ),
-            queue="orders",
-        )
+        except Exception:
+            self.db.rollback()
+            raise
         return self.orders.get_with_details(order.id) or order
 
     @staticmethod

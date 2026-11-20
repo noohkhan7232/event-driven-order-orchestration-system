@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -160,3 +161,21 @@ class FailedJob(UUIDMixin, TimestampMixin, Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     error_message: Mapped[str] = mapped_column(Text, nullable=False)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class OutboxEvent(UUIDMixin, Base):
+    __tablename__ = "outbox_events"
+    __table_args__ = (Index("ix_outbox_status_available", "status", "available_at"),)
+
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, nullable=False)
+    aggregate_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    queue: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    correlation_id: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)

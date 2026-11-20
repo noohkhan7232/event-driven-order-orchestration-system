@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     rabbitmq_default_pass: str = "guest"
     log_level: str = "INFO"
     metrics_token: str | None = None
+    outbox_max_attempts: int = Field(default=10, ge=1)
+    outbox_poll_interval_seconds: float = Field(default=0.5, gt=0)
+    outbox_retention_days: int = Field(default=7, ge=1)
 
     @model_validator(mode="after")
     def validate_production_secret(self) -> Self:
