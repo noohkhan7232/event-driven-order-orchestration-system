@@ -1,15 +1,15 @@
+import uuid
 from datetime import datetime
 from decimal import Decimal
-import uuid
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     Numeric,
     String,
     Text,
@@ -66,7 +66,7 @@ class Inventory(UUIDMixin, TimestampMixin, Base):
 class Order(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "orders"
     __table_args__ = (
-        UniqueConstraint("idempotency_key", name="uq_orders_idempotency_key"),
+        UniqueConstraint("customer_id", "idempotency_key", name="uq_orders_customer_idempotency_key"),
         Index("ix_orders_customer_status", "customer_id", "status"),
         Index("ix_orders_created_status", "created_at", "status"),
     )
@@ -74,6 +74,8 @@ class Order(UUIDMixin, TimestampMixin, Base):
     customer_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.CREATED, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    inventory_reserved: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    request_hash: Mapped[str | None] = mapped_column(String(64))
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text)

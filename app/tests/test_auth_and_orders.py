@@ -1,5 +1,6 @@
-from app.models.entities import Inventory, Warehouse
 from conftest import auth_header
+
+from app.models.entities import Inventory, Warehouse
 
 
 def test_signup_login_and_me(client):
@@ -20,12 +21,16 @@ def test_signup_login_and_me(client):
 
 def test_create_order_is_idempotent(client, db, monkeypatch):
     published = []
-    monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *args, **kwargs: published.append((args, kwargs)))
+    monkeypatch.setattr(
+        "app.events.publisher.celery_app.send_task", lambda *args, **kwargs: published.append((args, kwargs))
+    )
 
     warehouse = Warehouse(code="DFW-01", name="Dallas Fulfillment", region="south")
     db.add(warehouse)
     db.flush()
-    db.add(Inventory(sku="SKU-001", product_name="Premium Headphones", warehouse_id=warehouse.id, available_quantity=10))
+    db.add(
+        Inventory(sku="SKU-001", product_name="Premium Headphones", warehouse_id=warehouse.id, available_quantity=10)
+    )
     db.commit()
 
     headers = auth_header(client, "buyer@example.com", "strong-password")

@@ -27,4 +27,6 @@ class ShippingService:
     def record_event(self, shipment: Shipment, status: ShipmentStatus, location: str | None, notes: str | None) -> None:
         shipment.status = status
         self.db.add(ShipmentEvent(shipment_id=shipment.id, status=status, location=location, notes=notes))
-        self.db.add(AuditLog(entity_type="shipment", entity_id=shipment.id, action=f"shipment_{status.value}", payload={}))
+        self.db.add(
+            AuditLog(entity_type="shipment", entity_id=shipment.id, action=f"shipment_{status.value}", payload={})
+        )

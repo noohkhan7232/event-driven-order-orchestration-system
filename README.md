@@ -1,5 +1,7 @@
 # Event-Driven Order Orchestration System
 
+[![CI](https://github.com/noohkhan7232/event-driven-order-orchestration-system/actions/workflows/ci.yml/badge.svg)](https://github.com/noohkhan7232/event-driven-order-orchestration-system/actions/workflows/ci.yml)
+
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-SQLAlchemy-336791?logo=postgresql&logoColor=white)
@@ -28,15 +30,15 @@ These are the problems that separate a tutorial project from a system that could
 
 ## The Solution
 
-This project solves each of those problems directly, using patterns taken from real distributed backend architecture:
+This educational backend demonstrates the following patterns and their current limitations:
 
 | Problem | How this project solves it |
 |---|---|
-| Duplicate order requests (retries, double-clicks) | Every order requires an `Idempotency-Key` header. The same key always returns the same order — no duplicate orders, no duplicate charges. |
+| Duplicate order requests (retries, double-clicks) | Order creation requires an `Idempotency-Key`; scope and payload checks are described in the project review. Consumers are not yet idempotent. |
 | Slow, blocking order creation | The API only validates and persists the order intent, then publishes an event to RabbitMQ and returns immediately. All heavy work happens asynchronously. |
 | Multi-step workflows that can partially fail | Order → inventory reservation → payment authorization → shipment creation is broken into discrete steps, each independently retryable, with compensation logic (e.g., releasing reserved inventory if payment fails). |
-| Jobs that fail permanently | Failed tasks retry with backoff; if retries are exhausted, the job is moved to a dead-letter queue and persisted in a `failed_jobs` table instead of vanishing. |
-| "Is the system healthy?" | Health, metrics, and worker-monitoring endpoints expose the real-time state of the API and background workers. |
+| Jobs that fail permanently | Failed tasks retry with backoff; if retries are exhausted, failure details are persisted in `failed_jobs`. Some business failure paths also publish dead-letter events; automatic DLQ routing is not guaranteed. |
+| "Is the system healthy?" | Health and metrics endpoints expose API state. The workers endpoint lists static queue and schedule configuration. |
 | Access control | JWT-based authentication with role separation between customer, vendor, and admin. |
 
 ## How It Works (Architecture)
@@ -47,20 +49,18 @@ This project solves each of those problems directly, using patterns taken from r
 
 1. Client authenticates and receives a JWT.
 2. Client sends `POST /orders` with an `Idempotency-Key`.
-3. The API validates the request, checks the idempotency key, and persists the order as `pending`.
+3. The API validates the request, checks the idempotency key, and persists the order as `created`.
 4. The API publishes an `order.created` event to RabbitMQ and immediately returns a response — the client is never blocked waiting for fulfillment.
 5. A Celery worker picks up the event and executes the workflow: reserve inventory → authorize payment → create shipment.
 6. Each step updates PostgreSQL and emits audit log entries.
-7. If a step fails, the worker retries with backoff; if retries are exhausted, the job is dead-lettered and logged to `failed_jobs` for investigation.
-8. Redis backs Celery's result store and supports fast read/cache patterns.
+7. If a step fails, the worker retries with backoff; if retries are exhausted, failure details are logged to `failed_jobs` for investigation.
+8. Redis backs Celery's result store; application read caching is not implemented.
 
 This decouples the **API layer** (fast, synchronous, user-facing) from the **fulfillment layer** (slow, asynchronous, failure-tolerant) — which is the core idea behind event-driven backend design.
 
 ## Demo Video
-[![Watch the Demo Video Part 1]](docs/assets/part1.mp4)
-[![Watch the Demo Video Part 2]](docs/assets/part2.mp4)
 
-Note: The project demo video has been divided into two parts because GitHub does not allow large files to be committed. Therefore, the demo video is provided in two separate parts.
+Demo video: coming soon.
 
 ## 📖 Demo Explanation
 
@@ -113,7 +113,7 @@ app/
   tests/            pytest API and worker-flow tests
 scripts/            demo data seeding
 alembic/            migration history
-docs/               architecture diagram, recruiter review
+docs/               architecture diagram, project review
 ```
 
 ## API Documentation
@@ -127,7 +127,7 @@ http://127.0.0.1:8000/docs
 OpenAPI JSON:
 
 ```text
-http://127.0.0.1:8000/openapi.json
+http://127.0.0.1:8000/api/v1/openapi.json
 ```
 
 ### Authentication Example
@@ -138,7 +138,7 @@ curl -X POST http://localhost:8000/api/v1/auth/signup \
   -d '{"email":"customer@ordersapp.com","password":"CustomerPass123","full_name":"Demo Customer"}'
 ```
 
-Use the returned token on subsequent requests:
+Log in at `POST /api/v1/auth/login` with email and password, then use the returned token:
 
 ```http
 Authorization: Bearer <access_token>
@@ -159,15 +159,15 @@ curl -X POST http://localhost:8000/api/v1/orders \
 ```json
 {
   "id": "7bed0cac-dbc0-4137-986a-42bfada3e0bc",
-  "status": "fulfillment_requested",
+  "status": "created",
   "total_amount": "99.98",
   "currency": "USD",
-  "payments": [{ "status": "authorized" }],
-  "shipments": [{ "status": "created", "tracking_number": "ARCBFC3ECEE49DD" }]
+  "payments": [],
+  "shipments": []
 }
 ```
 
-Sending the exact same request again with the same `Idempotency-Key` returns this exact same response — no duplicate order is created.
+This is an abbreviated immediate HTTP 202 response. Fulfillment runs asynchronously; later reads can include payments and shipments. Retrying the same payload and key as the same customer returns the same order ID with its current status.
 
 Operational endpoints:
 
@@ -259,7 +259,7 @@ Test coverage includes:
 - Authentication and order API behavior
 - Health endpoint behavior
 - Worker flow simulation
-- Inventory/payment/shipment orchestration paths
+- Inventory reservation (see the hardening report for additional test evidence)
 
 ## Environment Variables
 
@@ -270,12 +270,12 @@ See [`.env.example`](.env.example). Important values:
 - `REDIS_URL`
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND`
-- `SECRET_KEY`
-- `IDEMPOTENCY_TTL_SECONDS`
+- `SECRET_KEY` (at least 32 characters and not a known default outside local/development/test)
+- `METRICS_TOKEN` (required to enable metrics outside local/development/test; authenticate with this bearer token or an admin JWT)
 
-## Recruiter Review
+## Project Review
 
-A concise hiring-manager style review is available here: [`docs/recruiter-review.md`](docs/recruiter-review.md).
+An engineering self-review is available here: [`docs/project-review.md`](docs/project-review.md).
 
 ## Future Enhancements
 

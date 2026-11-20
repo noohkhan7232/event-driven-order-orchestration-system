@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.models.entities import Order
@@ -17,10 +17,10 @@ class OrderRepository(Repository[Order]):
             .options(selectinload(Order.items), selectinload(Order.payments), selectinload(Order.shipments))
         )
 
-    def get_by_idempotency_key(self, key: str) -> Order | None:
+    def get_by_idempotency_key(self, customer_id: UUID, key: str) -> Order | None:
         return self.db.scalar(
             select(Order)
-            .where(Order.idempotency_key == key)
+            .where(Order.customer_id == customer_id, Order.idempotency_key == key)
             .options(selectinload(Order.items), selectinload(Order.payments), selectinload(Order.shipments))
         )
 
@@ -35,3 +35,6 @@ class OrderRepository(Repository[Order]):
                 .options(selectinload(Order.items), selectinload(Order.payments), selectinload(Order.shipments))
             ).all()
         )
+
+    def count_for_customer(self, customer_id: UUID) -> int:
+        return self.db.scalar(select(func.count()).select_from(Order).where(Order.customer_id == customer_id)) or 0

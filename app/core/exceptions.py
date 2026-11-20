@@ -25,3 +25,7 @@ class AuthorizationError(DomainError):
 
 class InsufficientInventoryError(ConflictError):
     code = "insufficient_inventory"
+
+
+class IdempotencyConflictError(ConflictError):
+    code = "idempotency_key_conflict"

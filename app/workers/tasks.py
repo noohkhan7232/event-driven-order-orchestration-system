@@ -50,6 +50,14 @@ def process_event(self, raw_event: dict) -> None:
             logger.warning("order_missing_for_event", order_id=str(event.aggregate_id))
             return
 
+        if order.status == OrderStatus.CANCELLED and event.event_type in {
+            EventNames.ORDER_CREATED,
+            EventNames.INVENTORY_RESERVED,
+            EventNames.PAYMENT_AUTHORIZED,
+        }:
+            logger.info("event_skipped_order_cancelled", order_id=str(order.id), event_type=event.event_type)
+            return
+
         if event.event_type == EventNames.ORDER_CREATED:
             _reserve_inventory(db, order)
         elif event.event_type == EventNames.INVENTORY_RESERVED:
@@ -67,7 +75,9 @@ def _reserve_inventory(db, order: Order) -> None:
         order.status = OrderStatus.INVENTORY_RESERVED
         db.commit()
         publisher.publish(
-            DomainEvent(event_type=EventNames.INVENTORY_RESERVED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
+            DomainEvent(
+                event_type=EventNames.INVENTORY_RESERVED, aggregate_id=order.id, payload={"order_id": str(order.id)}
+            ),
             queue="payments",
         )
     except Exception as exc:
@@ -88,7 +98,9 @@ def _authorize_payment(db, order: Order) -> None:
         order.status = OrderStatus.PAID
         db.commit()
         publisher.publish(
-            DomainEvent(event_type=EventNames.PAYMENT_AUTHORIZED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
+            DomainEvent(
+                event_type=EventNames.PAYMENT_AUTHORIZED, aggregate_id=order.id, payload={"order_id": str(order.id)}
+            ),
             queue="shipments",
         )
     else:
@@ -96,7 +108,9 @@ def _authorize_payment(db, order: Order) -> None:
         order.status = OrderStatus.FAILED
         db.commit()
         publisher.publish(
-            DomainEvent(event_type=EventNames.PAYMENT_FAILED, aggregate_id=order.id, payload={"order_id": str(order.id)}),
+            DomainEvent(
+                event_type=EventNames.PAYMENT_FAILED, aggregate_id=order.id, payload={"order_id": str(order.id)}
+            ),
             queue="dead_letter",
         )
 

@@ -54,5 +54,5 @@ def low_stock(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(UserRole.ADMIN, UserRole.VENDOR)),
 ):
-    rows, _ = InventoryRepository(db).list(limit=100, offset=0)
+    rows, total = InventoryRepository(db).list(limit=100, offset=0)
     return [row for row in rows if row.available_quantity <= row.low_stock_threshold]
