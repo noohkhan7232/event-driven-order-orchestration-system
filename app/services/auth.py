@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.auth.security import create_access_token, hash_password, verify_password
 from app.core.exceptions import AuthorizationError, ConflictError
 from app.models.entities import User
+from app.models.enums import UserRole
 from app.repositories.users import UserRepository
 from app.schemas.auth import UserCreate
 
@@ -19,7 +20,7 @@ class AuthService:
             email=payload.email.lower(),
             hashed_password=hash_password(payload.password),
             full_name=payload.full_name,
-            role=payload.role,
+            role=UserRole.CUSTOMER,
         )
         self.users.add(user)
         self.db.commit()

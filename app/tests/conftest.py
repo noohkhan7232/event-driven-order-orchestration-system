@@ -9,10 +9,13 @@ from sqlalchemy.orm import Session, sessionmaker
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_order_processing.db")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
+from app.auth.security import hash_password  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import *  # noqa: F401,F403,E402
+from app.models.entities import User  # noqa: E402
+from app.models.enums import UserRole  # noqa: E402
 
 engine = create_engine("sqlite:///./test_order_processing.db", connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
@@ -48,7 +51,14 @@ def client(db: Session):
 
 def auth_header(client: TestClient, email: str, password: str, role: str = "customer") -> dict[str, str]:
     payload = {"email": email, "password": password, "full_name": "Test User", "role": role}
-    client.post("/api/v1/auth/signup", json=payload)
+    if role == "customer":
+        client.post("/api/v1/auth/signup", json=payload)
+    else:
+        with TestingSessionLocal() as session:
+            session.add(
+                User(email=email, full_name="Test User", hashed_password=hash_password(password), role=UserRole(role))
+            )
+            session.commit()
     response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}

@@ -24,6 +24,15 @@ def main() -> None:
                     role=UserRole.CUSTOMER,
                 )
             )
+        if not db.query(User).filter_by(email="vendor@orders.local").first():
+            db.add(
+                User(
+                    email="vendor@orders.local",
+                    full_name="Demo Vendor",
+                    hashed_password=hash_password("VendorPassword123"),
+                    role=UserRole.VENDOR,
+                )
+            )
         warehouse = db.query(Warehouse).filter_by(code="DFW-01").first()
         if not warehouse:
             warehouse = Warehouse(code="DFW-01", name="Dallas Fulfillment Center", region="south")
