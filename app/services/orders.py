@@ -13,6 +13,8 @@ from app.models.entities import AuditLog, Order, OrderItem, User
 from app.models.enums import OrderStatus, UserRole
 from app.repositories.orders import OrderRepository
 from app.schemas.orders import OrderCreate, OrderItemCreate
+from app.services.inventory import InventoryService
+from app.services.payments import PaymentService
 
 
 class OrderService:
@@ -96,16 +98,16 @@ class OrderService:
 
     def cancel_order(self, order_id: UUID, user: User, reason: str | None = None) -> Order:
         order = self.get_order(order_id, user)
-        if order.status in {OrderStatus.SHIPPED, OrderStatus.DELIVERED}:
-            raise ConflictError("Shipped or delivered orders cannot be cancelled")
+        if order.status == OrderStatus.CANCELLED:
+            return order
+        if order.status in {OrderStatus.SHIPPED, OrderStatus.DELIVERED, OrderStatus.FAILED}:
+            raise ConflictError("Terminal orders cannot be cancelled")
+        InventoryService(self.db).release_for_order(order)
+        PaymentService(self.db).refund(order)
         order.status = OrderStatus.CANCELLED
         order.failure_reason = reason
         self.db.add(
             AuditLog(actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={})
         )
         self.db.commit()
-        self.publisher.publish(
-            DomainEvent(event_type="order.cancelled", aggregate_id=order.id, payload={"order_id": str(order.id)}),
-            queue="inventory",
-        )
         return self.orders.get_with_details(order.id) or order

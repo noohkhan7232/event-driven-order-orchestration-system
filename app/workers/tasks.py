@@ -50,6 +50,14 @@ def process_event(self, raw_event: dict) -> None:
             logger.warning("order_missing_for_event", order_id=str(event.aggregate_id))
             return
 
+        if order.status == OrderStatus.CANCELLED and event.event_type in {
+            EventNames.ORDER_CREATED,
+            EventNames.INVENTORY_RESERVED,
+            EventNames.PAYMENT_AUTHORIZED,
+        }:
+            logger.info("event_skipped_order_cancelled", order_id=str(order.id), event_type=event.event_type)
+            return
+
         if event.event_type == EventNames.ORDER_CREATED:
             _reserve_inventory(db, order)
         elif event.event_type == EventNames.INVENTORY_RESERVED:
