@@ -4,11 +4,12 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import DomainError
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, get_logger
 from app.middleware.request_context import RequestContextMiddleware
 from app.schemas.common import ErrorResponse
 
 configure_logging()
+logger = get_logger(__name__)
 settings = get_settings()
 
 app = FastAPI(
@@ -34,7 +35,12 @@ async def domain_error_handler(_: Request, exc: DomainError):
 
 
 @app.exception_handler(Exception)
-async def unhandled_error_handler(_: Request, exc: Exception):
+async def unhandled_error_handler(request: Request, exc: Exception):
+    logger.exception(
+        "unhandled_exception",
+        request_id=getattr(request.state, "request_id", None),
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     return JSONResponse(
         status_code=500,
         content=ErrorResponse(code="internal_server_error", message="Unexpected server error").model_dump(),
