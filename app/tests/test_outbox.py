@@ -88,3 +88,19 @@ def test_relay_exhaustion_and_retention(db, monkeypatch):
     db.commit()
     assert cleanup_published(db) == 1
     assert db.query(OutboxEvent).count() == 1
+
+
+def test_relay_due_selection_uses_database_clock(db, monkeypatch):
+    from app.repositories.outbox import OutboxRepository
+    from app.workers import outbox_relay
+
+    class SkewedClock:
+        @staticmethod
+        def now(tz=None):
+            return datetime(2000, 1, 1, tzinfo=UTC)
+
+    OutboxRepository(db).add(DomainEvent(event_type="test", aggregate_id=uuid4(), payload={}), "orders")
+    db.commit()
+    monkeypatch.setattr(outbox_relay, "datetime", SkewedClock)
+    monkeypatch.setattr("app.events.publisher.celery_app.send_task", lambda *a, **kw: None)
+    assert outbox_relay.relay_once(db, 1) == 1

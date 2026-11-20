@@ -4,7 +4,7 @@ import signal
 from datetime import UTC, datetime, timedelta
 from threading import Event
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 
 def relay_once(db: Session, batch_size: int = 100) -> int:
     settings = get_settings()
-    now = datetime.now(UTC)
+    now = db.scalar(select(func.now())) or datetime.now(UTC)
     statement = (
         select(OutboxEvent)
         .where(OutboxEvent.status == "pending", OutboxEvent.available_at <= now)
@@ -42,7 +42,7 @@ def relay_once(db: Session, batch_size: int = 100) -> int:
                     logger.error("outbox_delivery_exhausted", event_id=str(row.event_id), error=str(exc))
             else:
                 row.status = "published"
-                row.published_at = datetime.now(UTC)
+                row.published_at = now
                 row.last_error = None
                 count += 1
         db.commit()

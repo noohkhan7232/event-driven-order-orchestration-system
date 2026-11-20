@@ -40,6 +40,10 @@ class ResilientTask(Task):
             logger.exception("failure_compensation_error", task_id=task_id)
             # Fallback preserves even malformed poison messages or compensation errors.
             try:
+                try:
+                    parsed = DomainEvent.model_validate(raw)
+                except ValueError:
+                    parsed = None
                 with SessionLocal() as db:
                     db.rollback()
                     db.add(
@@ -48,6 +52,8 @@ class ResilientTask(Task):
                             queue_name=queue,
                             status=JobStatus.FAILED,
                             payload=raw,
+                            event_id=parsed.event_id if parsed else None,
+                            aggregate_id=parsed.aggregate_id if parsed else None,
                             error_message=str(exc),
                             retry_count=self.request.retries,
                         )

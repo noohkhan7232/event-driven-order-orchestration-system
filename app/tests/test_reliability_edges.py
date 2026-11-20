@@ -81,3 +81,18 @@ def test_missing_order_and_scheduled_task_controls(db, workflow):
     )
     assert tasks.check_low_stock.run() == ["SKU"]
     assert tasks.detect_delayed_shipments.run() == 0
+
+
+def test_failure_fallback_keeps_valid_event_identifiers(db, workflow, monkeypatch):
+    order, _ = workflow
+    event = DomainEvent(event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, payload={})
+    monkeypatch.setattr(tasks, "record_failure", lambda *a: (_ for _ in ()).throw(OSError("compensation failed")))
+    tasks.process_event.push_request(retries=3, delivery_info={"routing_key": "orders"})
+    try:
+        tasks.process_event.on_failure(
+            TransientError("offline"), str(uuid4()), [event.model_dump(mode="json")], {}, None
+        )
+    finally:
+        tasks.process_event.pop_request()
+    job = db.query(FailedJob).one()
+    assert job.event_id == event.event_id and job.aggregate_id == order.id
