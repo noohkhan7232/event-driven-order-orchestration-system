@@ -53,6 +53,7 @@ class ResilientTask(Task):
                             status=JobStatus.FAILED,
                             payload=raw,
                             event_id=parsed.event_id if parsed else None,
+                            tenant_id=parsed.tenant_id if parsed else None,
                             aggregate_id=parsed.aggregate_id if parsed else None,
                             error_message=str(exc),
                             retry_count=self.request.retries,
@@ -142,6 +143,7 @@ def _emit(db: Session, order: Order, kind: str, queue: str, event: DomainEvent |
         DomainEvent(
             event_type=kind,
             aggregate_id=order.id,
+            tenant_id=order.tenant_id,
             payload={"order_id": str(order.id), "reason": order.failure_reason},
             correlation_id=event.correlation_id if event else None,
         ),

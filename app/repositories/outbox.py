@@ -11,6 +11,7 @@ class OutboxRepository:
     def add(self, event: DomainEvent, queue: str) -> OutboxEvent:
         row = OutboxEvent(
             event_id=event.event_id,
+            tenant_id=event.tenant_id,
             aggregate_id=event.aggregate_id,
             event_type=event.event_type,
             queue=queue,

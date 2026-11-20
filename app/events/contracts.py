@@ -11,6 +11,7 @@ class DomainEvent(BaseModel):
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     payload: dict
     correlation_id: str | None = None
+    tenant_id: UUID | None = None
 
 
 class EventNames:

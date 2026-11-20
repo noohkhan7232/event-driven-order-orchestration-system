@@ -1,4 +1,4 @@
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -89,6 +89,7 @@ def test_legacy_migration_backfill_and_safe_downgrade(tmp_path, monkeypatch):
                 metadata.tables["users"].insert(),
                 {
                     "id": second_user,
+                    "tenant_id": UUID("00000000-0000-0000-0000-000000000001"),
                     "email": "other@example.com",
                     "hashed_password": "hash",
                     "full_name": "Other",
@@ -101,6 +102,8 @@ def test_legacy_migration_backfill_and_safe_downgrade(tmp_path, monkeypatch):
                 {
                     "id": uuid4(),
                     "customer_id": second_user,
+                    "tenant_id": UUID("00000000-0000-0000-0000-000000000001"),
+                    "principal_scope": f"user:{second_user}",
                     "idempotency_key": "legacy",
                     "status": "CREATED",
                     "total_amount": 10,

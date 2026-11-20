@@ -11,7 +11,7 @@ class InventoryService:
         self.inventory = InventoryRepository(db)
 
     def reserve_for_order(self, order: Order) -> None:
-        rows = self.inventory.lock_skus({item.sku for item in order.items})
+        rows = self.inventory.lock_skus(order.tenant_id, {item.sku for item in order.items})
         remaining = {row.id: row.available_quantity for row in rows}
         allocations = []
         for item in sorted(order.items, key=lambda item: item.sku):
@@ -32,7 +32,7 @@ class InventoryService:
     def release_for_order(self, order: Order) -> None:
         if not order.inventory_reserved:
             return
-        rows = self.inventory.lock_skus({item.sku for item in order.items})
+        rows = self.inventory.lock_skus(order.tenant_id, {item.sku for item in order.items})
         for item in sorted(order.items, key=lambda item: item.sku):
             if not item.warehouse_id:
                 continue

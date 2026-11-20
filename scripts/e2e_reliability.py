@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models.entities import FailedJob, Inventory, Order, OutboxEvent, Payment, Shipment, Warehouse  # noqa: E402
+from app.models.entities import FailedJob, Inventory, Order, OutboxEvent, Payment, Shipment, User, Warehouse  # noqa: E402
 
 
 def experiment(name: str, action: Callable[[], str]) -> bool:
@@ -70,7 +70,12 @@ class Harness:
         assert login.status_code == 200, login.text
         self.headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
         with self.sessions.begin() as db:
-            warehouse = Warehouse(code=f"E2E-{self.run_id}", name="Reliability proof", region="local-test")
+            registered = db.get(User, UUID(response.json()["id"]))
+            assert registered is not None and registered.tenant_id is not None
+            self.tenant_id = registered.tenant_id
+            warehouse = Warehouse(
+                tenant_id=self.tenant_id, code=f"E2E-{self.run_id}", name="Reliability proof", region="local-test"
+            )
             db.add(warehouse)
             db.flush()
             self.warehouse_id = warehouse.id
@@ -80,7 +85,11 @@ class Harness:
         with self.sessions.begin() as db:
             db.add(
                 Inventory(
-                    sku=sku, product_name="E2E reliability", warehouse_id=self.warehouse_id, available_quantity=quantity
+                    tenant_id=self.tenant_id,
+                    sku=sku,
+                    product_name="E2E reliability",
+                    warehouse_id=self.warehouse_id,
+                    available_quantity=quantity,
                 )
             )
         return sku

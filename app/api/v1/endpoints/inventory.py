@@ -18,7 +18,7 @@ def create_warehouse(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(UserRole.ADMIN, UserRole.VENDOR)),
 ):
-    warehouse = Warehouse(**payload.model_dump())
+    warehouse = Warehouse(tenant_id=_.tenant_id, **payload.model_dump())
     db.add(warehouse)
     db.commit()
     db.refresh(warehouse)
@@ -31,7 +31,7 @@ def create_inventory(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(UserRole.ADMIN, UserRole.VENDOR)),
 ):
-    item = Inventory(**payload.model_dump())
+    item = Inventory(tenant_id=_.tenant_id, **payload.model_dump())
     db.add(item)
     db.commit()
     db.refresh(item)

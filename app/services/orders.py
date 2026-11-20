@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from structlog.contextvars import get_contextvars
 
-from app.core.exceptions import ConflictError, IdempotencyConflictError, NotFoundError
+from app.core.exceptions import AuthorizationError, ConflictError, IdempotencyConflictError, NotFoundError
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
 from app.models.entities import AuditLog, Order, OrderItem, User
@@ -27,6 +27,8 @@ class OrderService:
         self.outbox = OutboxRepository(db)
 
     def create_order(self, customer: User, payload: OrderCreate, idempotency_key: str) -> Order:
+        if customer.tenant_id is None:
+            raise AuthorizationError("A tenant principal is required")
         request_hash = self._request_hash(payload)
         customer_id = customer.id
         existing = self.orders.get_by_idempotency_key(customer_id, idempotency_key)
@@ -43,6 +45,8 @@ class OrderService:
         total = sum((item.unit_price * item.quantity for item in items), Decimal("0.00"))
         order = Order(
             customer_id=customer.id,
+            tenant_id=customer.tenant_id,
+            principal_scope=f"user:{customer.id}",
             status=OrderStatus.CREATED,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
@@ -61,6 +65,7 @@ class OrderService:
                 DomainEvent(
                     event_type=EventNames.ORDER_CREATED,
                     aggregate_id=order.id,
+                    tenant_id=order.tenant_id,
                     payload={"order_id": str(order.id)},
                     correlation_id=get_contextvars().get("request_id"),
                 ),
@@ -126,6 +131,7 @@ class OrderService:
                 DomainEvent(
                     event_type="order.cancelled",
                     aggregate_id=order.id,
+                    tenant_id=order.tenant_id,
                     payload={"order_id": str(order.id)},
                     correlation_id=get_contextvars().get("request_id"),
                 ),

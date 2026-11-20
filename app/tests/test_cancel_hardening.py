@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 
 import pytest
+from conftest import DEFAULT_TENANT_ID
 
 from app.core.exceptions import ConflictError
 from app.events.contracts import DomainEvent, EventNames
@@ -13,12 +14,26 @@ from app.workers import tasks
 
 @pytest.fixture
 def order_stock(db, monkeypatch):
-    user = User(email="cancel@example.com", hashed_password="hash", full_name="Cancel User", role=UserRole.CUSTOMER)
-    warehouse = Warehouse(code="WH", name="Warehouse", region="test")
+    user = User(
+        tenant_id=DEFAULT_TENANT_ID,
+        email="cancel@example.com",
+        hashed_password="hash",
+        full_name="Cancel User",
+        role=UserRole.CUSTOMER,
+    )
+    warehouse = Warehouse(tenant_id=DEFAULT_TENANT_ID, code="WH", name="Warehouse", region="test")
     db.add_all([user, warehouse])
     db.flush()
-    stock = Inventory(sku="SKU", product_name="Product", warehouse_id=warehouse.id, available_quantity=10)
-    order = Order(customer_id=user.id, idempotency_key="cancel", status=OrderStatus.CREATED)
+    stock = Inventory(
+        tenant_id=DEFAULT_TENANT_ID, sku="SKU", product_name="Product", warehouse_id=warehouse.id, available_quantity=10
+    )
+    order = Order(
+        tenant_id=DEFAULT_TENANT_ID,
+        principal_scope=f"user:{user.id}",
+        customer_id=user.id,
+        idempotency_key="cancel",
+        status=OrderStatus.CREATED,
+    )
     order.items.append(OrderItem(sku="SKU", quantity=2, unit_price=10, product_name="Product"))
     db.add_all([stock, order])
     db.commit()

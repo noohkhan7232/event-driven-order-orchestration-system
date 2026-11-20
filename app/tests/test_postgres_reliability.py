@@ -5,7 +5,7 @@ from threading import Barrier, Lock
 from uuid import uuid4
 
 import pytest
-from conftest import TestingSessionLocal, engine
+from conftest import DEFAULT_TENANT_ID, TestingSessionLocal, engine
 from sqlalchemy import select
 from test_consumers import consume
 
@@ -28,7 +28,13 @@ def test_postgres_50_reservations_against_stock_10(db, workflow, monkeypatch):
     order, stock = workflow
     orders = [order]
     for _ in range(49):
-        new = Order(customer_id=order.customer_id, idempotency_key=str(uuid4()), status=OrderStatus.CREATED)
+        new = Order(
+            tenant_id=DEFAULT_TENANT_ID,
+            principal_scope=f"user:{order.customer_id}",
+            customer_id=order.customer_id,
+            idempotency_key=str(uuid4()),
+            status=OrderStatus.CREATED,
+        )
         new.items.append(OrderItem(sku="SKU", product_name="Product", quantity=1, unit_price=10))
         db.add(new)
         orders.append(new)

@@ -1,4 +1,4 @@
-from conftest import auth_header
+from conftest import DEFAULT_TENANT_ID, auth_header
 
 from app.models.entities import Inventory, OutboxEvent, Warehouse
 
@@ -21,11 +21,17 @@ def test_signup_login_and_me(client):
 
 def test_create_order_is_idempotent(client, db, monkeypatch):
 
-    warehouse = Warehouse(code="DFW-01", name="Dallas Fulfillment", region="south")
+    warehouse = Warehouse(tenant_id=DEFAULT_TENANT_ID, code="DFW-01", name="Dallas Fulfillment", region="south")
     db.add(warehouse)
     db.flush()
     db.add(
-        Inventory(sku="SKU-001", product_name="Premium Headphones", warehouse_id=warehouse.id, available_quantity=10)
+        Inventory(
+            tenant_id=DEFAULT_TENANT_ID,
+            sku="SKU-001",
+            product_name="Premium Headphones",
+            warehouse_id=warehouse.id,
+            available_quantity=10,
+        )
     )
     db.commit()
 

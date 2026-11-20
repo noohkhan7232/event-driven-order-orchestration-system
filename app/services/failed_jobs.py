@@ -27,6 +27,7 @@ def record_failure(
         transition(order, OrderStatus.FAILED, db=db, reason="RETRIES_EXHAUSTED")
     job = FailedJob(
         task_name=task_name,
+        tenant_id=order.tenant_id if order else event.tenant_id,
         queue_name=queue,
         status=JobStatus.FAILED,
         payload=raw_event,
