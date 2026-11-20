@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 from app.auth.principal import Principal, get_principal
 from app.core.exceptions import AuthorizationError, NotFoundError
 from app.db.session import get_db
-from app.models.entities import Inventory, Warehouse
+from app.models.entities import Inventory, Product, Warehouse
 from app.repositories.inventory import InventoryRepository
 from app.schemas.common import Page
 from app.schemas.inventory import InventoryCreate, InventoryRead, InventoryUpdate, WarehouseCreate
+from app.services.catalog import CatalogValidationError
 
 router = APIRouter()
 
@@ -44,7 +45,10 @@ def create_inventory(
     if warehouse is None:
         raise NotFoundError("Warehouse not found")
     tenant_id = tenant_scope(principal, "inventory:write")
-    item = Inventory(tenant_id=tenant_id, **payload.model_dump())
+    product = db.scalar(select(Product).where(Product.tenant_id == tenant_id, Product.sku == payload.sku))
+    if product is None:
+        raise CatalogValidationError("product_required", "Inventory requires an existing product")
+    item = Inventory(tenant_id=tenant_id, product_name=product.name, **payload.model_dump(exclude={"product_name"}))
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -93,6 +97,10 @@ def update_inventory(
 ):
     item = scoped_inventory(db, principal, inventory_id)
     principal.require("inventory:write")
+    product = db.scalar(select(Product).where(Product.tenant_id == principal.tenant_id, Product.sku == item.sku))
+    if product is None:
+        raise CatalogValidationError("product_required", "Inventory requires an existing product")
+    item.product_name = product.name
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
     db.commit()

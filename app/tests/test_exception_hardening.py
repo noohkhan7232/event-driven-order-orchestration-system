@@ -4,7 +4,7 @@ from app.main import app
 
 
 def test_unhandled_exception_logs_request_id_and_safe_body(client, monkeypatch, capsys):
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise RuntimeError("private database failure")
 
     monkeypatch.setattr("app.repositories.orders.OrderRepository.list_for_tenant", fail)

@@ -19,6 +19,35 @@ from app.workers import tasks
 pytestmark = pytest.mark.postgres
 
 
+def test_postgres_concurrent_double_replay_has_one_fresh_event(db, workflow):
+    from app.core.exceptions import ConflictError, TransientError
+    from app.services.failed_jobs import record_failure, replay_failed_job
+
+    order, _ = workflow
+    event = DomainEvent(
+        event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, tenant_id=order.tenant_id, payload={}
+    )
+    job = record_failure(db, event.model_dump(mode="json"), TransientError("offline"), 3, "orders", "test")
+    job_id, actor, tenant_id = job.id, order.customer_id, order.tenant_id
+    gate = Barrier(2)
+
+    def replay(_):
+        gate.wait(timeout=30)
+        with TestingSessionLocal() as session:
+            try:
+                replay_failed_job(session, job_id, actor=actor, tenant_id=tenant_id)
+                return "replayed"
+            except ConflictError as exc:
+                return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(replay, range(2)))
+    assert sorted(results) == ["job_already_replayed", "replayed"]
+    db.expire_all()
+    rows = db.query(OutboxEvent).filter_by(aggregate_id=order.id, event_type=EventNames.ORDER_CREATED).all()
+    assert len(rows) == 1 and rows[0].event_id != event.event_id
+
+
 @pytest.fixture(autouse=True)
 def require_real_postgres():
     assert engine.dialect.name == "postgresql", "TEST_DATABASE_URL must select real PostgreSQL"

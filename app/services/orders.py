@@ -16,6 +16,7 @@ from app.models.enums import OrderStatus
 from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.schemas.orders import OrderCreate, OrderItemCreate
+from app.services.catalog import CatalogValidationError, products_for_order
 from app.services.inventory import InventoryService
 from app.services.payments import PaymentService
 from app.services.shipping import ShippingService
@@ -35,19 +36,30 @@ class OrderService:
         tenant_id = principal.tenant_id
         customer_id = principal.user.id if principal.user else None
         principal_scope = f"user:{customer_id}" if customer_id else "tenant"
-        request_hash = self._request_hash(payload)
         existing = self.orders.get_by_idempotency_key(tenant_id, principal_scope, idempotency_key)
         if existing:
-            return self._check_replay(existing, request_hash)
+            return self._check_replay(existing, self._request_hash(payload, existing.currency))
 
-        # Demo pricing is intentionally deterministic; real pricing would call catalog/pricing services.
+        products = products_for_order(self.db, tenant_id, {item.sku for item in payload.items})
+        currencies = {row.currency for row in products.values()}
+        if len(currencies) != 1:
+            raise CatalogValidationError("mixed_currency", "All order items must share one currency")
+        currency = next(iter(currencies))
+        if payload.currency is not None and payload.currency.upper() != currency:
+            raise CatalogValidationError("currency_mismatch", "Order currency must match product currency")
+        request_hash = self._request_hash(payload, currency)
         items = [
             OrderItem(
-                sku=item.sku, product_name="Pending catalog lookup", quantity=item.quantity, unit_price=Decimal("49.99")
+                sku=item.sku,
+                product_name=products[item.sku].name,
+                quantity=item.quantity,
+                unit_price=products[item.sku].price.quantize(Decimal("0.01")),
             )
             for item in payload.items
         ]
-        total = sum((item.unit_price * item.quantity for item in items), Decimal("0.00"))
+        total = sum((item.unit_price * item.quantity for item in items), Decimal("0.00")).quantize(Decimal("0.01"))
+        if total > Decimal("9999999999.99"):
+            raise CatalogValidationError("order_total_out_of_range", "Order total exceeds the supported amount")
         order = Order(
             customer_id=customer_id,
             tenant_id=tenant_id,
@@ -55,7 +67,11 @@ class OrderService:
             status=OrderStatus.CREATED,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
-            currency=payload.currency.upper(),
+            currency=currency,
+            external_reference=payload.external_reference,
+            buyer_name=payload.buyer_name,
+            buyer_email=payload.buyer_email,
+            buyer_phone=payload.buyer_phone,
             total_amount=total,
             items=items,
         )
@@ -89,9 +105,9 @@ class OrderService:
         return self.orders.get_with_details(order.id) or order
 
     @staticmethod
-    def _request_hash(payload: OrderCreate) -> str:
-        canonical = payload.model_dump()
-        canonical["currency"] = payload.currency.upper()
+    def _request_hash(payload: OrderCreate, currency: str | None = None) -> str:
+        canonical = payload.model_dump(exclude_none=True)
+        canonical["currency"] = (payload.currency or currency or "").upper()
         canonical["items"] = sorted(canonical["items"], key=lambda item: (item["sku"], item["quantity"]))
         return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -100,6 +116,10 @@ class OrderService:
         original_hash = order.request_hash or self._request_hash(
             OrderCreate(
                 currency=order.currency,
+                external_reference=order.external_reference,
+                buyer_name=order.buyer_name,
+                buyer_email=order.buyer_email,
+                buyer_phone=order.buyer_phone,
                 items=[OrderItemCreate(sku=item.sku, quantity=item.quantity) for item in order.items],
             )
         )

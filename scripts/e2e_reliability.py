@@ -20,7 +20,17 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models.entities import FailedJob, Inventory, Order, OutboxEvent, Payment, Shipment, User, Warehouse  # noqa: E402
+from app.models.entities import (  # noqa: E402
+    FailedJob,
+    Inventory,
+    Order,
+    OutboxEvent,
+    Payment,
+    Product,
+    Shipment,
+    User,
+    Warehouse,
+)
 
 
 def experiment(name: str, action: Callable[[], str]) -> bool:
@@ -85,6 +95,7 @@ class Harness:
     def seed(self, label: str, quantity: int = 10, prefix: str = "") -> str:
         sku = f"{prefix}E2E-{self.run_id}-{label}"
         with self.sessions.begin() as db:
+            db.add(Product(tenant_id=self.tenant_id, sku=sku, name="E2E reliability", price="49.99", currency="USD"))
             db.add(
                 Inventory(
                     tenant_id=self.tenant_id,
@@ -247,14 +258,25 @@ class Harness:
                 job = db.scalar(select(FailedJob).where(FailedJob.aggregate_id == UUID(order)))
                 assert job and job.payload["event_id"] == str(job.event_id) and job.retry_count == 3
                 job_id = job.id
+                failed_order = db.get(Order, UUID(order))
+                assert failed_order is not None
+                actor = failed_order.customer_id
             code = (
                 "from app.db.session import SessionLocal; from app.services.failed_jobs import replay_failed_job; "
-                f"from uuid import UUID; db=SessionLocal(); replay_failed_job(db,UUID('{job_id}')); db.close()"
+                "from uuid import UUID; db=SessionLocal(); "
+                f"replay_failed_job(db,UUID('{job_id}'),actor=UUID('{actor}')); db.close()"
             )
-            compose("exec", "-T", "api", "python", "-c", code)
-            time.sleep(1)
-            assert self.stock(sku) == (10, 0)
-            return "retries exhausted=3; full failed event persisted; compensated; terminal-safe replay"
+            os.environ["FAILURE_INJECTION_ENABLED"] = "false"
+            try:
+                compose("up", "-d", "--no-deps", "--force-recreate", "worker")
+                compose("exec", "-T", "api", "python", "-c", code)
+                self.poll(order, "fulfillment_requested")
+                assert self.stock(sku) == (9, 1)
+                assert self.count(Payment, [order]) == self.count(Shipment, [order]) == 1
+            finally:
+                os.environ["FAILURE_INJECTION_ENABLED"] = "true"
+                compose("up", "-d", "--no-deps", "--force-recreate", "worker")
+            return "retries exhausted=3; compensated; fresh replay without injection completed; one payment/shipment"
         assert self.stock(sku) == (9, 1)
         assert self.count(Payment, [order]) == self.count(Shipment, [order]) == 1
         return "transient retry succeeds; exactly one reservation/payment/shipment"

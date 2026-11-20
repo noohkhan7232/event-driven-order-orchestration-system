@@ -123,3 +123,19 @@ def test_unknown_signup_tenant_is_generic_even_for_known_email(client):
         },
     )
     assert result.status_code == 404 and result.json()["code"] == "not_found"
+
+
+def test_role_dependency_positive_and_negative_controls():
+    import pytest
+
+    from app.auth.dependencies import require_roles
+    from app.core.exceptions import AuthorizationError
+    from app.models.entities import User
+    from app.models.enums import UserRole
+
+    owner = User(role=UserRole.ADMIN)
+    customer = User(role=UserRole.CUSTOMER)
+    dependency = require_roles(UserRole.ADMIN)
+    assert dependency(owner) is owner
+    with pytest.raises(AuthorizationError):
+        dependency(customer)

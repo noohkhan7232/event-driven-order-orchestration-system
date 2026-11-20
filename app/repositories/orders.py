@@ -1,9 +1,11 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.models.entities import Order
+from app.models.enums import OrderStatus
 from app.repositories.base import Repository
 
 
@@ -47,11 +49,28 @@ class OrderRepository(Repository[Order]):
         return self.db.scalar(select(func.count()).select_from(Order).where(Order.customer_id == customer_id)) or 0
 
     def list_for_tenant(
-        self, tenant_id: UUID, limit: int, offset: int, customer_id: UUID | None = None
+        self,
+        tenant_id: UUID,
+        limit: int,
+        offset: int,
+        customer_id: UUID | None = None,
+        *,
+        status: OrderStatus | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        external_reference: str | None = None,
     ) -> tuple[list[Order], int]:
         conditions = [Order.tenant_id == tenant_id]
         if customer_id is not None:
             conditions.append(Order.customer_id == customer_id)
+        if status is not None:
+            conditions.append(Order.status == status)
+        if created_from is not None:
+            conditions.append(Order.created_at >= created_from)
+        if created_to is not None:
+            conditions.append(Order.created_at <= created_to)
+        if external_reference is not None:
+            conditions.append(Order.external_reference == external_reference)
         statement = select(Order).where(*conditions)
         total = self.db.scalar(select(func.count()).select_from(Order).where(*conditions)) or 0
         items = list(

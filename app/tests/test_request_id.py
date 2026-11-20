@@ -48,3 +48,17 @@ def test_postgres_long_request_id_order_is_accepted(client, db):
     row = db.query(OutboxEvent).one()
     assert row.correlation_id == response.headers["x-request-id"]
     assert len(row.correlation_id) <= 64
+
+
+def test_unhandled_error_echoes_effective_request_id(client, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    headers = auth_header(client, "failed-request@example.com", "strong-password")
+    monkeypatch.setattr(
+        "app.repositories.orders.OrderRepository.list_for_tenant",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("injected failure")),
+    )
+    with TestClient(app, raise_server_exceptions=False) as safe:
+        response = safe.get("/api/v1/orders", headers={**headers, "x-request-id": "invalid value"})
+    assert response.status_code == 500
+    assert UUID(response.headers["x-request-id"]).version == 4

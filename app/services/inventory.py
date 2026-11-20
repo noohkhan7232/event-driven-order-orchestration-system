@@ -24,7 +24,6 @@ class InventoryService:
         for item, selected in allocations:
             selected.available_quantity -= item.quantity
             selected.reserved_quantity += item.quantity
-            item.product_name = selected.product_name
             item.warehouse_id = selected.warehouse_id
         order.inventory_reserved = True
         self.db.add(AuditLog(entity_type="order", entity_id=order.id, action="inventory_reserved", payload={}))

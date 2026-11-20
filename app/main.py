@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -43,5 +45,6 @@ async def unhandled_error_handler(request: Request, exc: Exception):
     )
     return JSONResponse(
         status_code=500,
+        headers={"x-request-id": getattr(request.state, "request_id", str(uuid4()))},
         content=ErrorResponse(code="internal_server_error", message="Unexpected server error").model_dump(),
     )

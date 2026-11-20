@@ -20,14 +20,23 @@ from app.db.base import Base  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import *  # noqa: F401,F403,E402
-from app.models.entities import DEFAULT_TENANT_ID, Inventory, Order, OrderItem, Tenant, User, Warehouse  # noqa: E402
+from app.models.entities import (  # noqa: E402
+    DEFAULT_TENANT_ID,
+    Inventory,
+    Order,
+    OrderItem,
+    Product,  # noqa: E402
+    Tenant,
+    User,
+    Warehouse,
+)
 from app.models.enums import OrderStatus, UserRole  # noqa: E402
 from app.workers import tasks  # noqa: E402
 
 engine = (
-    create_engine(test_url, connect_args={"check_same_thread": False})
+    create_engine(test_url, hide_parameters=True, connect_args={"check_same_thread": False})
     if test_url.get_backend_name() == "sqlite"
-    else create_engine(test_url, pool_size=60, max_overflow=0)
+    else create_engine(test_url, hide_parameters=True, pool_size=60, max_overflow=0)
 )
 TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
@@ -41,6 +50,13 @@ def reset_database(request):
     Base.metadata.create_all(bind=engine)
     with TestingSessionLocal.begin() as setup:
         setup.add(Tenant(id=DEFAULT_TENANT_ID, name="Default Store", slug="default"))
+        setup.flush()
+        setup.add_all(
+            [
+                Product(tenant_id=DEFAULT_TENANT_ID, sku=sku, name="Test Product", price=49.99, currency="USD")
+                for sku in ["SKU", "SKU-001"]
+            ]
+        )
     yield
     Base.metadata.drop_all(bind=engine)
 

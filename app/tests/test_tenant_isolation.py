@@ -42,6 +42,11 @@ def test_tenant_resource_isolation_matrix(client, db, role):
     db.flush()
     stocka = Inventory(tenant_id=a.id, sku="SAME", product_name="Alpha", warehouse_id=wa.id, available_quantity=10)
     stockb = Inventory(tenant_id=b.id, sku="SAME", product_name="Beta", warehouse_id=wb.id, available_quantity=20)
+    from app.models.entities import Product
+
+    db.add_all(
+        [Product(tenant_id=store.id, sku="SAME", name="Snapshot", price=19.99, currency="USD") for store in [a, b]]
+    )
     db.add_all([stocka, stockb])
     db.commit()
     order = OrderService(db).create_order(
@@ -51,6 +56,7 @@ def test_tenant_resource_isolation_matrix(client, db, role):
     db.add(shipment)
     db.commit()
     keya, _ = create_api_key(db, Principal(a.id, user=owner), ApiKeyCreate(name="alpha", scopes=["orders:read"]))
+    product_a = db.scalar(select(Product).where(Product.tenant_id == a.id))
     if role == "key":
         # Owner management requires ADMIN; issue the integration key through a temporary owner role.
         other.role = UserRole.ADMIN
@@ -60,6 +66,25 @@ def test_tenant_resource_isolation_matrix(client, db, role):
     else:
         headers = {"Authorization": f"Bearer {AuthService(db).login(other.email, 'strong-password')}"}
     assert client.get(f"/api/v1/orders/{order.id}", headers=headers).status_code == 404
+    assert client.get(f"/api/v1/products/{product_a.id}", headers=headers).status_code == 404
+    assert client.patch(f"/api/v1/products/{product_a.id}", headers=headers, json={"price": "0"}).status_code == 404
+    catalog = client.get("/api/v1/products", headers=headers)
+    assert catalog.status_code == (403 if role == "customer" else 200)
+    if role != "customer":
+        assert catalog.json()["total"] == 1
+        assert all(row["id"] != str(product_a.id) for row in catalog.json()["items"])
+    new_product = client.post(
+        "/api/v1/products", headers=headers, json={"sku": "B-ONLY", "name": "Beta only", "price": "1.00"}
+    )
+    assert new_product.status_code == (403 if role == "customer" else 201)
+    warehouse = client.post(
+        "/api/v1/inventory/warehouses", headers=headers, json={"code": "B-ONLY", "name": "Beta", "region": "test"}
+    )
+    assert warehouse.status_code == (403 if role == "customer" else 201)
+    key_creation = client.post(
+        "/api/v1/api-keys", headers=headers, json={"name": "Beta managed", "scopes": ["orders:read"]}
+    )
+    assert key_creation.status_code == (201 if role == "admin" else 403)
     assert client.post(f"/api/v1/orders/{order.id}/cancel", headers=headers).status_code == 404
     assert client.get(f"/api/v1/inventory/{stocka.id}", headers=headers).status_code == 404
     assert (
@@ -133,6 +158,10 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("GET", "/api/v1/products"),
+        ("POST", "/api/v1/products"),
+        ("GET", "/api/v1/products/{product_id}"),
+        ("PATCH", "/api/v1/products/{product_id}"),
         ("GET", "/api/v1/auth/me"),
         ("GET", "/api/v1/orders"),
         ("POST", "/api/v1/orders"),
@@ -150,6 +179,12 @@ def test_route_registry_has_no_unclassified_routes():
         ("DELETE", "/api/v1/api-keys/{key_id}"),
     }
     platform = {("GET", "/api/v1/system/metrics"), ("GET", "/api/v1/system/workers")}
+    platform |= {
+        ("GET", "/api/v1/admin/tenants"),
+        ("GET", "/api/v1/admin/tenants/{tenant_id}"),
+        ("POST", "/api/v1/admin/tenants/{tenant_id}/suspend"),
+        ("POST", "/api/v1/admin/tenants/{tenant_id}/activate"),
+    }
     actual = {(method, route.path) for route in app.routes for method in route.methods}
     assert not actual - (public | tenant | platform)
 
