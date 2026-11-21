@@ -25,6 +25,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
     task_routes={
+        "app.workers.tasks.process_refund": {"queue": "payments"},
         "app.workers.tasks.process_event": {"queue": "orders"},
         "app.workers.tasks.check_low_stock": {"queue": "inventory"},
         "app.workers.tasks.detect_delayed_shipments": {"queue": "shipments"},

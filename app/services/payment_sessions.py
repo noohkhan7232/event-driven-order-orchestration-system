@@ -18,8 +18,8 @@ from app.providers.mock_v2 import MockPaymentProviderV2
 from app.providers.resolution import resolve_payment_provider
 from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
+from app.services.inbound_payments import stage_receipt
 from app.services.inventory import InventoryService
-from app.services.payment_events import apply_capture
 from app.services.shipping import ShippingService
 
 
@@ -144,7 +144,7 @@ def handle_payment(db: Session, order: Order, event: DomainEvent, retries: int) 
             if isinstance(provider, MockPaymentProviderV2) and settings.mock_payment_auto_complete:
                 headers, body = provider.signed_capture(result)
                 (notice,) = provider.verify_and_parse_webhook(headers, body, settings.mock_webhook_secret)
-                apply_capture(db, locked, current, notice, event)
+                stage_receipt(db, provider.name, locked.tenant_id, notice.event_id, [notice], event.correlation_id)
         else:
             current.status = PaymentStatus.FAILED
             current.provider_status = "failed"

@@ -198,7 +198,7 @@ def test_crash_in_final_phase_retries_the_same_durable_attempt(db, workflow):
     event = DomainEvent(event_type="payment.requested", aggregate_id=order.id, payload={})
 
     def crash(repo, notice, queue):
-        if notice.event_type == EventNames.PAYMENT_AUTHORIZED:
+        if notice.event_type == "payment.provider_event":
             raise RuntimeError("synthetic crash")
         return original(repo, notice, queue)
 

@@ -7,6 +7,7 @@ from app.models.entities import AuditLog, Order, Payment
 from app.models.enums import PaymentStatus
 from app.providers.contracts import ProviderDeclined
 from app.providers.registry import get_payment_provider
+from app.services.refund_intents import request_refund
 
 
 class PaymentService:
@@ -47,13 +48,11 @@ class PaymentService:
         )
         return payment
 
-    def refund(self, order: Order) -> None:
+    def refund(self, order: Order, *, reason: str = "ORDER_CANCELLED", correlation_id: str | None = None) -> None:
         for payment in order.payments:
-            if payment.status == PaymentStatus.AUTHORIZED:
-                result = get_payment_provider().refund(
-                    order, payment, idempotency_key=f"{order.id}:refund:{payment.id}"
-                )
-                payment.status = result.status
-                self.db.add(
-                    AuditLog(entity_type="payment", entity_id=payment.id, action="payment_refunded", payload={})
-                )
+            if payment.provider == "cod":
+                continue
+            if payment.status in {PaymentStatus.AUTHORIZED, PaymentStatus.CAPTURED}:
+                request_refund(self.db, order, payment, reason, correlation_id=correlation_id)
+            elif payment.status == PaymentStatus.INITIATED:
+                payment.status, payment.provider_status = PaymentStatus.FAILED, "abandoned"

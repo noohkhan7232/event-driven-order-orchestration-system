@@ -33,6 +33,7 @@ def order_stock(db, monkeypatch):
         customer_id=user.id,
         idempotency_key="cancel",
         status=OrderStatus.CREATED,
+        total_amount=20,
     )
     order.items.append(OrderItem(sku="SKU", quantity=2, unit_price=10, product_name="Product"))
     db.add_all([stock, order])
@@ -74,6 +75,12 @@ def test_cancel_refunds_authorized_payment_once(db, order_stock):
     order.status = OrderStatus.PAID
     db.commit()
     OrderService(db).cancel_order(order.id, user)
+    from app.models.entities import Refund
+
+    assert db.query(Refund).one().status == "requested"
+    assert payment.status == PaymentStatus.AUTHORIZED
+    tasks.process_refund.run(str(db.query(Refund).one().id))
+    db.refresh(payment)
     assert payment.status == PaymentStatus.REFUNDED
     OrderService(db).cancel_order(order.id, user)
     assert db.query(AuditLog).filter_by(action="payment_refunded").count() == 1

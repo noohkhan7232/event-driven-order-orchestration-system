@@ -53,11 +53,12 @@ def request_refund(
     return row
 
 
-def succeed_refund(db: Session, refund: Refund, payment: Payment, reference: str) -> None:
+def succeed_refund(db: Session, refund: Refund, payment: Payment, reference: str | None) -> None:
     if refund.status == "succeeded":
         return
     refund.provider_refund_id = reference
     refund.status, refund.last_error = "succeeded", None
+    refund.claim_token, refund.lease_until = None, None
     payment.status, payment.provider_status = PaymentStatus.REFUNDED, "refunded"
     db.add(AuditLog(entity_type="payment", entity_id=payment.id, action="payment_refunded", payload={}))
     db.add(AuditLog(entity_type="refund", entity_id=refund.id, action="refund_succeeded", payload={}))

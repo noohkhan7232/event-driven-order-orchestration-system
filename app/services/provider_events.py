@@ -15,6 +15,7 @@ from app.providers.contracts import ProviderEvent, minor_units
 from app.repositories.orders import OrderRepository
 from app.services.payment_events import apply_capture
 from app.services.refund_intents import request_refund, succeed_refund
+from app.services.refunds import fail_refund
 
 
 def captured_charge(db: Session, order: Order, payment: Payment, notice: ProviderEvent, event: DomainEvent) -> None:
@@ -83,7 +84,7 @@ def refund_notice(db: Session, order: Order, payment: Payment, notice: ProviderE
         succeed_refund(db, refund, payment, notice.provider_refund_id)
     else:
         refund.provider_refund_id = notice.provider_refund_id
-        refund.status, refund.last_error = "failed", "provider_refund_failed"
+        fail_refund(db, refund, "provider_refund_failed")
 
 
 def process_provider_event(db: Session, event: DomainEvent) -> None:

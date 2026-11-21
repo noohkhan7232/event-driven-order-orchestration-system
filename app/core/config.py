@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     mock_payment_auto_complete: bool | None = None
     mock_refund_fail_attempts: int = Field(default=0, ge=0)
     payment_window_seconds: int = Field(default=1800, ge=1)
+    refund_lease_seconds: int = Field(default=60, ge=1)
     public_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
 
     @field_validator("credentials_encryption_key")

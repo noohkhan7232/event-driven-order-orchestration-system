@@ -143,6 +143,25 @@ class RazorpayProvider:
             raise ProviderUnavailable("Invalid provider order response") from None
 
     def refund(self, payment: PaymentAttempt, amount_minor: int, idempotency_key: str) -> ProviderRefund:
+        existing = self.find_refund(payment, amount_minor, idempotency_key)
+        if existing:
+            return existing
+        pid = identifier(payment.provider_payment_id)
+        receipt = hashlib.sha256(idempotency_key.encode()).hexdigest()[:32]
+        found = self._request(
+            "POST",
+            f"payments/{pid}/refund",
+            json={"amount": amount_minor, "speed": "normal", "receipt": receipt},
+            headers={"X-Refund-Idempotency": receipt},
+        )
+        try:
+            if found["amount"] != amount_minor or found["payment_id"] != pid:
+                raise ValueError
+            return ProviderRefund(identifier(found["id"]), found["status"])
+        except (KeyError, TypeError, ValueError):
+            raise ProviderUnavailable("Invalid provider refund response") from None
+
+    def find_refund(self, payment: PaymentAttempt, amount_minor: int, idempotency_key: str) -> ProviderRefund | None:
         pid = identifier(payment.provider_payment_id)
         receipt = hashlib.sha256(idempotency_key.encode()).hexdigest()[:32]
         try:
@@ -153,13 +172,7 @@ class RazorpayProvider:
                 if found is not None:
                     break
                 if len(rows) < 100:
-                    found = self._request(
-                        "POST",
-                        f"payments/{pid}/refund",
-                        json={"amount": amount_minor, "speed": "normal", "receipt": receipt},
-                        headers={"X-Refund-Idempotency": receipt},
-                    )
-                    break
+                    return None
                 skip += len(rows)
             if found["amount"] != amount_minor or found["payment_id"] != pid:
                 raise ValueError

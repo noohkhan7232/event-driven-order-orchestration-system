@@ -149,6 +149,32 @@ def test_refunds_reconcile_and_fetch():
     assert adapter.fetch_payment_status("order_one")[0].type == "payment_captured"
 
 
+@pytest.mark.parametrize("event", ["unhandled.event", "refund.created"])
+def test_unsupported_or_pending_refund_notifications_are_ignored(event):
+    from app.providers.razorpay import parse_signed
+
+    raw = json.dumps({"event": event, "payload": {"refund": {"entity": {"status": "pending"}}}}).encode()
+    headers = {
+        "x-razorpay-event-id": "evt_ignored",
+        "x-razorpay-signature": hmac.new(b"test", raw, "sha256").hexdigest(),
+    }
+    assert parse_signed(headers, raw, SecretStr("test")) == []
+
+
+@pytest.mark.parametrize("amount,payment_id", [(True, "pay_ok"), (100, "pay/unsafe")])
+def test_signed_but_invalid_financial_entities_are_rejected(amount, payment_id):
+    from app.providers.razorpay import parse_signed
+
+    entity = {"id": payment_id, "order_id": "order_ok", "amount": amount, "currency": "INR"}
+    raw = json.dumps({"event": "payment.captured", "payload": {"payment": {"entity": entity}}}).encode()
+    headers = {
+        "x-razorpay-event-id": "evt_invalid",
+        "x-razorpay-signature": hmac.new(b"test", raw, "sha256").hexdigest(),
+    }
+    with pytest.raises(ProviderDeclined, match="Invalid webhook"):
+        parse_signed(headers, raw, SecretStr("test"))
+
+
 @pytest.mark.skipif(
     not (os.getenv("RAZORPAY_TEST_KEY_ID") and os.getenv("RAZORPAY_TEST_KEY_SECRET")),
     reason="Razorpay test credentials absent",

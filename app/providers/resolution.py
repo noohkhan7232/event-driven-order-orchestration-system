@@ -32,3 +32,23 @@ def resolve_payment_provider(db: Session, tenant_id: UUID, settings: Settings | 
     if settings.environment in {"local", "development", "test"} and settings.allow_mock_providers:
         return MockPaymentProviderV2(settings)
     raise PaymentNotConfigured("Prepaid payments are not configured")
+
+
+def resolve_refund_provider(
+    db: Session, tenant_id: UUID, provider: str | None, settings: Settings | None = None
+) -> PaymentProviderV2:
+    settings = settings or get_settings()
+    if provider in {"mock", "simulation_gateway"}:
+        if settings.environment in {"local", "development", "test"} and settings.allow_mock_providers:
+            return MockPaymentProviderV2(settings)
+    elif provider == "razorpay":
+        row = db.scalar(
+            select(TenantPaymentConfig).where(
+                TenantPaymentConfig.tenant_id == tenant_id, TenantPaymentConfig.provider == provider
+            )
+        )
+        if row:
+            return RazorpayProvider(
+                row.key_id, CredentialVault(settings.credentials_encryption_key).decrypt(row.key_secret_enc)
+            )
+    raise PaymentNotConfigured("Refund provider is not configured")

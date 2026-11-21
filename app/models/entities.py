@@ -181,15 +181,26 @@ class Order(UUIDMixin, TimestampMixin, Base):
 
     @property
     def payment_status(self) -> str | None:
-        payment = max(self.payments, key=lambda p: (p.created_at, p.id), default=None)
+        payment = self.primary_payment
         return (payment.provider_status or payment.status.value) if payment else None
+
+    def _payment_rank(self, payment: "Payment") -> tuple[int, datetime, uuid.UUID]:
+        prefix = f"{self.id}:payment:"
+        suffix = (payment.idempotency_key or "").removeprefix(prefix)
+        number = int(suffix) if (payment.idempotency_key or "").startswith(prefix) and suffix.isdecimal() else 0
+        return number, payment.created_at, payment.id
+
+    @property
+    def primary_payment(self) -> "Payment | None":
+        sessions = [payment for payment in self.payments if payment.idempotency_key or payment.provider == "cod"]
+        return max(sessions or self.payments, key=self._payment_rank, default=None)
 
     @property
     def checkout(self) -> dict | None:
         if self.payment_method == "prepaid" and self.status == OrderStatus.PAYMENT_PENDING:
-            for payment in self.payments:
-                if payment.status == PaymentStatus.INITIATED and payment.checkout_payload:
-                    return {**payment.checkout_payload, "expires_at": self.payment_expires_at}
+            payment = self.primary_payment
+            if payment and payment.status == PaymentStatus.INITIATED and payment.checkout_payload:
+                return {**payment.checkout_payload, "expires_at": self.payment_expires_at}
         return None
 
     customer: Mapped[User | None] = relationship(back_populates="orders")
@@ -303,6 +314,11 @@ class Refund(UUIDMixin, TimestampMixin, Base):
     idempotency_key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     last_error: Mapped[str | None] = mapped_column(String(240))
     correlation_id: Mapped[str | None] = mapped_column(String(255))
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("failed_jobs.id", name="fk_refund_failed_job")
+    )
 
 
 class InboundWebhookEvent(UUIDMixin, Base):

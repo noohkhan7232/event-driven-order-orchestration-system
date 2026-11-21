@@ -47,6 +47,14 @@ def test_mock_auto_complete_forbidden_in_production():
         )
 
 
+def test_mock_refund_injection_uses_durable_attempt_count_after_worker_restart():
+    from app.providers.mock_v2 import MockPaymentProviderV2
+
+    provider = MockPaymentProviderV2(Settings(_env_file=None, mock_refund_fail_attempts=2))
+    result = provider.refund(PaymentAttempt(uuid4(), retry_attempt=2), 100, "restart-key")
+    assert result.status == "processed"
+
+
 @pytest.mark.parametrize("sku", ["FAIL-PAYMENT-X", "FAIL-TRANSIENT-X", "FAIL-TRANSIENT-EXHAUST-X"])
 def test_mock_v2_preserves_failure_injection(sku):
     from app.providers.mock_v2 import MockPaymentProviderV2

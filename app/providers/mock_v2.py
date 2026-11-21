@@ -93,7 +93,7 @@ class MockPaymentProviderV2:
                 raise ProviderDeclined("Refund idempotency conflict")
             self._refund_amounts[rid] = amount_minor
             if rid not in self._refunds:
-                attempts = self._attempts.get(rid, 0)
+                attempts = max(self._attempts.get(rid, 0), payment.retry_attempt)
                 self._attempts[rid] = attempts + 1
                 if attempts < self.settings.mock_refund_fail_attempts:
                     raise ProviderUnavailable("Injected refund unavailable")
@@ -105,6 +105,13 @@ class MockPaymentProviderV2:
             if provider_refund_id not in self._refunds:
                 raise ProviderDeclined("Refund not found")
             return self._refunds[provider_refund_id]
+
+    def find_refund(self, payment: PaymentAttempt, amount_minor: int, idempotency_key: str) -> ProviderRefund | None:
+        rid = reference(f"{payment.id}:{idempotency_key}")
+        with self._refund_lock:
+            if rid in self._refund_amounts and self._refund_amounts[rid] != amount_minor:
+                raise ProviderDeclined("Refund idempotency conflict")
+            return self._refunds.get(rid)
 
     def fetch_payment_status(self, provider_order_id: str) -> list[ProviderEvent]:
         with self._lock:

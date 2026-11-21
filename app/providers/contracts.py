@@ -78,6 +78,9 @@ class PaymentProviderV2(Protocol):
     def fetch_payment_status(self, provider_order_id: str) -> list[ProviderEvent]: ...
 
     def fetch_refund(self, provider_refund_id: str) -> ProviderRefund: ...
+    def find_refund(
+        self, payment: PaymentAttempt, amount_minor: int, idempotency_key: str
+    ) -> ProviderRefund | None: ...
 
 
 class ProviderDeclined(BusinessError):

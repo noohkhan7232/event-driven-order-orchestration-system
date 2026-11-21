@@ -135,6 +135,21 @@ def test_payment_failed_is_nonterminal_and_later_capture_succeeds(db, pending_pa
     assert order.status == OrderStatus.PAID and payment.provider_status == "captured"
 
 
+def test_refunded_mismatched_charge_does_not_replace_primary_payment_summary(db, pending_payment):
+    from app.models.entities import Refund
+
+    order, payment, _ = pending_payment
+    deliver(db, order, amount=2000, payment_id="pay_wrong")
+    refund = db.query(Refund).one()
+    deliver(db, order, kind="refund_processed", amount=2000, payment_id="pay_wrong", refund_id="rfnd_wrong")
+    assert refund.status == "succeeded"
+    assert order.payment_status == "pending" and order.checkout is None
+    assert order.primary_payment.id == payment.id
+    deliver(db, order, payment_id="pay_correct")
+    assert order.status == OrderStatus.PAID and order.payment_status == "captured"
+    assert order.primary_payment.id == payment.id
+
+
 def test_refund_notifications_preserve_success_and_do_not_duplicate_effects(db, pending_payment):
     from app.models.entities import AuditLog, Refund
     from app.services.refund_intents import request_refund, succeed_refund
