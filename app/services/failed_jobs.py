@@ -25,7 +25,7 @@ def record_failure(
     if order and OrderStatus.FAILED in TRANSITIONS.get(order.status, set()):
         InventoryService(db).release_for_order(order)
         PaymentService(db).refund(order)
-        transition(order, OrderStatus.FAILED, db=db, reason="RETRIES_EXHAUSTED")
+        transition(order, OrderStatus.FAILED, db=db, reason="RETRIES_EXHAUSTED", correlation_id=event.correlation_id)
     job = FailedJob(
         task_name=task_name,
         tenant_id=order.tenant_id if order else event.tenant_id,

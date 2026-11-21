@@ -82,7 +82,9 @@ def test_missing_order_and_scheduled_task_controls(db, workflow):
     tasks.process_event.run(
         DomainEvent(event_type=EventNames.ORDER_CREATED, aggregate_id=uuid4(), payload={}).model_dump(mode="json")
     )
-    assert tasks.check_low_stock.run() == ["SKU"]
+    from conftest import DEFAULT_TENANT_ID
+
+    assert tasks.check_low_stock.run() == {str(DEFAULT_TENANT_ID): 1}
     assert tasks.detect_delayed_shipments.run() == 0
 
 

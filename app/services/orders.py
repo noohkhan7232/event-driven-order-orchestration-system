@@ -10,6 +10,7 @@ from structlog.contextvars import get_contextvars
 from app.auth.principal import Principal
 from app.core.exceptions import AuthorizationError, ConflictError, IdempotencyConflictError, NotFoundError
 from app.domain.order_state import transition
+from app.domain.timeline import record_initial_order
 from app.events.contracts import DomainEvent, EventNames
 from app.models.entities import AuditLog, Order, OrderItem, User
 from app.models.enums import OrderStatus
@@ -77,6 +78,7 @@ class OrderService:
         )
         try:
             self.orders.add(order)
+            record_initial_order(self.db, order)
             self.db.add(
                 AuditLog(
                     actor_id=customer_id, entity_type="order", entity_id=order.id, action="order_created", payload={}

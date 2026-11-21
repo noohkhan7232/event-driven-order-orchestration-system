@@ -1,3 +1,5 @@
+import secrets
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -8,6 +10,8 @@ from app.models.entities import Tenant, User
 from app.models.enums import UserRole
 from app.repositories.users import UserRepository
 from app.schemas.auth import UserCreate
+
+DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
 
 
 class AuthService:
@@ -43,7 +47,8 @@ class AuthService:
 
     def login(self, email: str, password: str) -> str:
         user = self.users.get_by_email(email.lower())
-        if not user or not verify_password(password, user.hashed_password):
+        valid_password = verify_password(password, user.hashed_password if user else DUMMY_PASSWORD_HASH)
+        if not user or not valid_password:
             raise AuthorizationError("Invalid email or password")
         return create_access_token(
             str(user.id), {"role": user.role.value, "tid": str(user.tenant_id) if user.tenant_id else None}

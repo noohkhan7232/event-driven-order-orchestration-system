@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import InsufficientInventoryError, NotFoundError
-from app.models.entities import AuditLog, Inventory, Order
+from app.core.exceptions import InsufficientInventoryError
+from app.models.entities import AuditLog, Order
 from app.repositories.inventory import InventoryRepository
 
 
@@ -43,13 +43,3 @@ class InventoryService:
                 selected.reserved_quantity = max(0, selected.reserved_quantity - item.quantity)
         order.inventory_reserved = False
         self.db.add(AuditLog(entity_type="order", entity_id=order.id, action="inventory_released", payload={}))
-
-    def low_stock_items(self) -> list[Inventory]:
-        rows, _ = self.inventory.list(limit=100, offset=0)
-        return [row for row in rows if row.available_quantity <= row.low_stock_threshold]
-
-    def get_or_404(self, inventory_id):
-        item = self.inventory.get(inventory_id)
-        if not item:
-            raise NotFoundError("Inventory item not found")
-        return item

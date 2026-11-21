@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     CheckConstraint,
     DateTime,
     Enum,
@@ -26,6 +27,23 @@ from app.db.base import Base, TimestampMixin, UUIDMixin
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus, ShipmentStatus, UserRole
 
 DEFAULT_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+class OrderTimeline(Base):
+    __tablename__ = "order_timeline"
+    __table_args__ = (
+        Index("ix_order_timeline_tenant_id", "tenant_id", "id"),
+        Index("ix_order_timeline_order_id", "order_id", "id"),
+    )
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    order_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orders.id"), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(40))
+    to_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Tenant(UUIDMixin, TimestampMixin, Base):
@@ -70,7 +88,7 @@ class ApiKey(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "api_keys"
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    key_prefix: Mapped[str] = mapped_column(String(12), unique=True, index=True, nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(24), unique=True, index=True, nullable=False)
     key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

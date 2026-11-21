@@ -89,6 +89,20 @@ def test_tenant_resource_isolation_matrix(client, db, role):
     assert client.get(f"/api/v1/inventory/{stocka.id}", headers=headers).status_code == 404
     assert (
         client.post(
+            f"/api/v1/inventory/{stocka.id}/adjustments",
+            headers=headers,
+            json={"delta": 1, "reason": "Foreign attempt"},
+        ).status_code
+        == 404
+    )
+    own_adjustment = client.post(
+        f"/api/v1/inventory/{stockb.id}/adjustments",
+        headers=headers,
+        json={"delta": 1, "reason": "Owned adjustment"},
+    )
+    assert own_adjustment.status_code == (403 if role == "customer" else 200)
+    assert (
+        client.post(
             f"/api/v1/shipments/{shipment.id}/events", headers=headers, json={"status": "delivered"}
         ).status_code
         == 404
@@ -173,6 +187,7 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/inventory/low-stock"),
         ("GET", "/api/v1/inventory/{inventory_id}"),
         ("PATCH", "/api/v1/inventory/{inventory_id}"),
+        ("POST", "/api/v1/inventory/{inventory_id}/adjustments"),
         ("POST", "/api/v1/shipments/{shipment_id}/events"),
         ("GET", "/api/v1/api-keys"),
         ("POST", "/api/v1/api-keys"),
@@ -187,6 +202,10 @@ def test_route_registry_has_no_unclassified_routes():
     }
     actual = {(method, route.path) for route in app.routes for method in route.methods}
     assert not actual - (public | tenant | platform)
+    from app.core.config import get_settings
+    from app.core.ratelimit import policies_for
+
+    assert all(policies_for(method, path, get_settings()) for method, path in public)
 
 
 def test_tenant_owner_cannot_read_platform_endpoints(client, db):

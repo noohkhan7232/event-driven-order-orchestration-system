@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import re
 import secrets
 import string
@@ -11,13 +12,26 @@ from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal
 from app.auth.security import hash_password
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.config import Settings, get_settings
+from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
 from app.models.entities import ApiKey, Tenant, User
 from app.models.enums import UserRole
 from app.schemas.tenancy import ApiKeyCreate, TenantRegister
 
 
-def register_tenant(db: Session, payload: TenantRegister) -> Tenant:
+class RegistrationClosed(AuthorizationError):
+    code = "registration_closed"
+
+
+def register_tenant(db: Session, payload: TenantRegister, *, settings: Settings | None = None) -> Tenant:
+    settings = settings or get_settings()
+    invited = True
+    if settings.registration_invite_code is not None:
+        expected = settings.registration_invite_code.get_secret_value()
+        supplied = payload.invite_code.get_secret_value() if payload.invite_code else ""
+        invited = hmac.compare_digest(supplied.encode(), expected.encode())
+    if not settings.registration_enabled or not invited:
+        raise RegistrationClosed("Registration is closed")
     stem = re.sub(r"[^a-z0-9]+", "-", payload.business_name.lower()).strip("-")[:29] or "store"
     slug = payload.slug or f"{stem}-{uuid4().hex[:8]}"
     tenant = Tenant(name=payload.business_name, slug=slug)
@@ -48,8 +62,8 @@ def create_api_key(db: Session, principal: Principal, payload: ApiKeyCreate) -> 
         row = ApiKey(
             tenant_id=principal.tenant_id,
             name=payload.name,
-            key_prefix=key[:12],
-            key_hash=hashlib.sha256(key[12:].encode()).hexdigest(),
+            key_prefix=key[:17],
+            key_hash=hashlib.sha256(key[17:].encode()).hexdigest(),
             scopes=list(dict.fromkeys(payload.scopes)),
             expires_at=payload.expires_at,
             created_by=owner.id,

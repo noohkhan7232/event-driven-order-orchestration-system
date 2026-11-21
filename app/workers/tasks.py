@@ -1,4 +1,5 @@
 from celery import Task
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -8,7 +9,7 @@ from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
-from app.models.entities import FailedJob, Order, ProcessedEvent
+from app.models.entities import FailedJob, Inventory, Order, ProcessedEvent, Tenant
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus
 from app.observability.metrics import DUPLICATE_EVENTS
 from app.providers.contracts import ProviderDeclined
@@ -101,6 +102,8 @@ def process_event(self, raw_event: dict) -> None:
                 EventNames.INVENTORY_RESERVED: OrderStatus.INVENTORY_RESERVED,
                 EventNames.PAYMENT_AUTHORIZED: OrderStatus.PAID,
             }
+            # order.status_changed is informational. Its consumer may record the
+            # marker, never transition again (which would create an event loop).
             if event.event_type in expected:
                 if order.status == OrderStatus.CANCELLED:
                     logger.info("event_skipped_order_cancelled", event_id=str(event.event_id))
@@ -139,47 +142,80 @@ def _emit(db: Session, order: Order, kind: str, queue: str, event: DomainEvent |
 
 
 def _reserve_inventory(db: Session, order: Order, event: DomainEvent | None = None) -> None:
+    trace = event.correlation_id if event else None
     try:
         InventoryService(db).reserve_for_order(order)
     except InsufficientInventoryError:
-        transition(order, OrderStatus.FAILED, db=db, reason="INSUFFICIENT_INVENTORY")
+        transition(order, OrderStatus.FAILED, db=db, reason="INSUFFICIENT_INVENTORY", correlation_id=trace)
         _emit(db, order, EventNames.INVENTORY_FAILED, "inventory", event)
         return
-    transition(order, OrderStatus.INVENTORY_RESERVED, db=db)
+    transition(order, OrderStatus.INVENTORY_RESERVED, db=db, correlation_id=trace)
     _emit(db, order, EventNames.INVENTORY_RESERVED, "payments", event)
 
 
 def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
-    transition(order, OrderStatus.PAYMENT_PENDING, db=db)
+    trace = event.correlation_id if event else None
+    transition(order, OrderStatus.PAYMENT_PENDING, db=db, correlation_id=trace)
     payment = PaymentService(db).authorize(order, retry_attempt=process_event.request.retries)
     if payment.status == PaymentStatus.AUTHORIZED:
-        transition(order, OrderStatus.PAID, db=db)
+        transition(order, OrderStatus.PAID, db=db, correlation_id=trace)
         _emit(db, order, EventNames.PAYMENT_AUTHORIZED, "shipments", event)
     else:
         InventoryService(db).release_for_order(order)
-        transition(order, OrderStatus.FAILED, db=db, reason="PAYMENT_DECLINED")
+        transition(order, OrderStatus.FAILED, db=db, reason="PAYMENT_DECLINED", correlation_id=trace)
         _emit(db, order, EventNames.PAYMENT_FAILED, "payments", event)
 
 
 def _create_shipment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
+    trace = event.correlation_id if event else None
     try:
         ShippingService(db).create_shipment(order)
     except ProviderDeclined:
         PaymentService(db).refund(order)
         InventoryService(db).release_for_order(order)
-        transition(order, OrderStatus.FAILED, db=db, reason="SHIPMENT_FAILED")
+        transition(order, OrderStatus.FAILED, db=db, reason="SHIPMENT_FAILED", correlation_id=trace)
         _emit(db, order, "shipment.failed", "shipments", event)
         return
-    transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db)
+    transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db, correlation_id=trace)
     _emit(db, order, EventNames.SHIPMENT_CREATED, "shipments", event)
 
 
 @celery_app.task(name="app.workers.tasks.check_low_stock")
-def check_low_stock() -> list[str]:
+def check_low_stock() -> dict[str, int]:
+    counts: dict[str, int] = {}
     with SessionLocal() as db:
-        items = InventoryService(db).low_stock_items()
-        logger.warning("low_stock_scan_completed", count=len(items), skus=[item.sku for item in items])
-        return [item.sku for item in items]
+        tenant_cursor = None
+        while True:
+            query = select(Tenant.id).order_by(Tenant.id).limit(100)
+            if tenant_cursor is not None:
+                query = query.where(Tenant.id > tenant_cursor)
+            tenant_ids = list(db.scalars(query))
+            if not tenant_ids:
+                break
+            for tenant_id in tenant_ids:
+                cursor = None
+                count = 0
+                while True:
+                    stock = (
+                        select(Inventory.id)
+                        .where(
+                            Inventory.tenant_id == tenant_id,
+                            Inventory.available_quantity <= Inventory.low_stock_threshold,
+                        )
+                        .order_by(Inventory.id)
+                        .limit(100)
+                    )
+                    if cursor is not None:
+                        stock = stock.where(Inventory.id > cursor)
+                    ids = list(db.scalars(stock))
+                    if not ids:
+                        break
+                    count += len(ids)
+                    cursor = ids[-1]
+                counts[str(tenant_id)] = count
+                logger.warning("low_stock_scan_completed", tenant_id=str(tenant_id), count=count)
+            tenant_cursor = tenant_ids[-1]
+    return counts
 
 
 @celery_app.task(name="app.workers.tasks.detect_delayed_shipments")

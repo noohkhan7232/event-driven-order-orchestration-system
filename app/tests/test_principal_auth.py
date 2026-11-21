@@ -58,7 +58,7 @@ def test_api_key_show_once_hash_uniform_auth_and_throttle(client, db, capsys):
     created = response.json()
     key = created["key"]
     row = db.query(ApiKey).one()
-    assert row.key_prefix == key[:12] and key not in str(row.__dict__)
+    assert row.key_prefix == key[:17] and key not in str(row.__dict__)
     assert key not in client.get("/api/v1/api-keys", headers=owner).text
     with patch("app.auth.principal.hmac.compare_digest", wraps=__import__("hmac").compare_digest) as compare:
         assert client.get("/api/v1/orders", headers={"X-API-Key": key}).status_code == 200

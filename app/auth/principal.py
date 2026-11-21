@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.security import decode_access_token
+from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthorizationError, DomainError
+from app.core.ratelimit import authenticated_policy, enforce
 from app.db.session import get_db
 from app.models.entities import ApiKey, Tenant, User
 from app.models.enums import UserRole
@@ -100,15 +102,23 @@ def authenticate_jwt(token: str, db: Session) -> Principal:
 
 
 def authenticate_api_key(key: str, db: Session) -> Principal:
-    row = db.scalar(select(ApiKey).where(ApiKey.key_prefix == key[:12]).execution_options(populate_existing=True))
-    candidate = hashlib.sha256(key[12:].encode()).hexdigest()
-    matches = hmac.compare_digest(row.key_hash if row else "0" * 64, candidate)
+    rows = list(
+        db.scalars(
+            select(ApiKey).where(ApiKey.key_prefix.in_([key[:12], key[:17]])).execution_options(populate_existing=True)
+        )
+    )
+    row: ApiKey | None = None
+    for possible in rows:
+        candidate = hashlib.sha256(key[len(possible.key_prefix) :].encode()).hexdigest()
+        if hmac.compare_digest(possible.key_hash, candidate):
+            row = possible
+    if not rows:
+        hmac.compare_digest("0" * 64, hashlib.sha256(key[17:].encode()).hexdigest())
     now = datetime.now(UTC)
     # Comparison always occurs, including malformed/unknown/revoked/expired keys.
     if not (
         KEY_PATTERN.fullmatch(key)
         and row
-        and matches
         and row.revoked_at is None
         and (row.expires_at is None or aware(row.expires_at) > now)
     ):
@@ -130,16 +140,26 @@ def authenticate_api_key(key: str, db: Session) -> Principal:
 
 
 def get_principal(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> Principal:
     if authorization is not None and x_api_key is not None:
         raise AmbiguousCredentials("Supply exactly one credential")
     if x_api_key is not None:
-        return authenticate_api_key(x_api_key, db)
+        principal = authenticate_api_key(x_api_key, db)
+        if principal.api_key is None:
+            raise AuthenticationError("Invalid credentials")
+        enforce(request, settings, authenticated_policy(settings), f"key:{principal.api_key.id}")
+        return principal
     if authorization is not None:
         scheme, separator, token = authorization.partition(" ")
         if separator and scheme.lower() == "bearer" and token:
-            return authenticate_jwt(token, db)
+            principal = authenticate_jwt(token, db)
+            if principal.user is None:
+                raise AuthenticationError("Invalid credentials")
+            enforce(request, settings, authenticated_policy(settings), f"user:{principal.user.id}")
+            return principal
     raise AuthenticationError("Invalid credentials")

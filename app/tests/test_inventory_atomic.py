@@ -21,7 +21,18 @@ def test_partial_inventory_reservation_is_never_left_behind(db, workflow):
     consume(order, EventNames.ORDER_CREATED)
     assert order.status == OrderStatus.FAILED and order.failure_reason == "INSUFFICIENT_INVENTORY"
     assert stock.available_quantity == 10 and not order.inventory_reserved
-    assert db.query(OutboxEvent).one().event_type == "inventory.failed"
+    assert (
+        db.query(OutboxEvent).filter(OutboxEvent.event_type != EventNames.ORDER_STATUS_CHANGED).one().event_type
+        == "inventory.failed"
+    )
+    assert (
+        db.query(OutboxEvent).filter_by(event_type=EventNames.ORDER_STATUS_CHANGED).one().payload["payload"]["to"]
+        == "failed"
+    )
+    assert (
+        db.query(OutboxEvent).filter_by(event_type=EventNames.ORDER_STATUS_CHANGED).one().payload["payload"]["reason"]
+        == "INSUFFICIENT_INVENTORY"
+    )
 
 
 def test_fulfillment_cancel_compensates_shipment_payment_inventory_atomically(db, workflow):

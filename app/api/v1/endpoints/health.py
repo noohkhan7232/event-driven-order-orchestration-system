@@ -1,12 +1,13 @@
 import secrets
 
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.auth.principal import AmbiguousCredentials, get_principal
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthorizationError
+from app.core.ratelimit import authenticated_policy, enforce
 from app.db.session import SessionLocal, get_db
 from app.observability.metrics import metrics_response
 
@@ -26,6 +27,7 @@ def readiness():
 
 
 def require_platform_access(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),
@@ -39,8 +41,9 @@ def require_platform_access(
         and scheme.lower() == "bearer"
         and secrets.compare_digest(token.encode(), settings.metrics_token.encode())
     ):
+        enforce(request, settings, authenticated_policy(settings), "metrics-token")
         return
-    principal = get_principal(authorization, x_api_key, db)
+    principal = get_principal(request, authorization, x_api_key, db, settings)
     if not principal.is_platform_admin:
         raise AuthorizationError("Platform administrator required")
 

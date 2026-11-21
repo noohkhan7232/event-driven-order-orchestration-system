@@ -86,7 +86,8 @@ def test_recovery_scope_suspension_discard_and_missing_order(db, workflow):
     with pytest.raises(ConflictError) as error:
         replay_failed_job(db, orphan.id, actor=order.customer_id)
     assert error.value.code == "order_not_retryable"
-    assert db.query(OutboxEvent).count() == 0
+    assert db.query(OutboxEvent).filter(OutboxEvent.event_type != EventNames.ORDER_STATUS_CHANGED).count() == 0
+    assert db.query(OutboxEvent).filter_by(event_type=EventNames.ORDER_STATUS_CHANGED).count() == 1
 
 
 def test_nonterminal_replay_creates_missing_original_intent(db, workflow):

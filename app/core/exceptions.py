@@ -41,3 +41,11 @@ class InsufficientInventoryError(BusinessError):
 
 class IdempotencyConflictError(ConflictError):
     code = "idempotency_key_conflict"
+
+
+class WarehouseCodeConflict(ConflictError):
+    code = "warehouse_code_conflict"
+
+
+class InventoryConflict(ConflictError):
+    code = "inventory_conflict"

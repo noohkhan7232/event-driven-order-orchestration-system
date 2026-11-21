@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, SecretStr, field_validator
 
 from app.models.entities import Tenant
 
@@ -10,6 +10,7 @@ Scope = Literal["orders:read", "orders:write", "catalog:read", "catalog:write", 
 
 
 class TenantRegister(BaseModel):
+    invite_code: SecretStr | None = None
     business_name: str = Field(min_length=2, max_length=160)
     slug: str | None = None
     owner_email: EmailStr

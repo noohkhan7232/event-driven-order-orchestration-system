@@ -19,6 +19,75 @@ from app.workers import tasks
 pytestmark = pytest.mark.postgres
 
 
+def test_postgres_adjustments_and_thirty_reservations_conserve_stock(db, workflow, monkeypatch):
+    from app.api.v1.endpoints.inventory import adjust_inventory
+    from app.auth.principal import Principal
+    from app.core.exceptions import DomainError
+    from app.models.entities import User
+    from app.models.enums import UserRole
+    from app.schemas.inventory import InventoryAdjustment
+
+    initial, stock = workflow
+    stock.available_quantity = 20
+    user = db.get(User, initial.customer_id)
+    user.role = UserRole.VENDOR
+    db.commit()
+    events = []
+    for index in range(30):
+        order = Order(
+            tenant_id=initial.tenant_id,
+            customer_id=user.id,
+            principal_scope=f"user:{user.id}",
+            idempotency_key=f"race-{index}",
+            status=OrderStatus.CREATED,
+        )
+        order.items.append(OrderItem(sku="SKU", product_name="Snapshot", quantity=1, unit_price=10))
+        db.add(order)
+        db.flush()
+        events.append(
+            DomainEvent(
+                event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, tenant_id=order.tenant_id, payload={}
+            ).model_dump(mode="json")
+        )
+    db.commit()
+    monkeypatch.setattr(tasks, "SessionLocal", TestingSessionLocal)
+    actions = []
+    for index, event in enumerate(events):
+        if index < 20:
+            actions.append(("adjust", 4 if index % 2 == 0 else -2))
+        actions.append(("reserve", event))
+
+    def run(action):
+        kind, value = action
+        if kind == "reserve":
+            tasks.process_event.run(value)
+            return 0
+        with TestingSessionLocal() as session:
+            try:
+                adjust_inventory(
+                    stock.id,
+                    InventoryAdjustment(delta=value, reason="Concurrent count"),
+                    session,
+                    Principal(initial.tenant_id, user=user),
+                )
+                return value
+            except DomainError as error:
+                assert error.code == "negative_stock"
+                return 0
+
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        accepted = sum(pool.map(run, actions))
+    db.expire_all()
+    reserved = db.query(Order).filter(Order.id != initial.id, Order.inventory_reserved.is_(True)).count()
+    assert stock.available_quantity == 20 + accepted - reserved
+    assert stock.reserved_quantity == reserved
+    assert stock.available_quantity >= 0 and reserved <= 30
+    print(
+        f"CONSERVATION PASS: initial=20 accepted_delta={accepted} "
+        f"reserved={reserved} available={stock.available_quantity}"
+    )
+
+
 def test_postgres_concurrent_double_replay_has_one_fresh_event(db, workflow):
     from app.core.exceptions import ConflictError, TransientError
     from app.services.failed_jobs import record_failure, replay_failed_job
@@ -230,5 +299,14 @@ def test_postgres_two_tenants_same_sku_have_independent_stock(db, monkeypatch):
         assert stock.available_quantity == 0 and stock.reserved_quantity == 2
         assert db.query(Order).filter_by(tenant_id=tenant.id, status=OrderStatus.INVENTORY_RESERVED).count() == 2
         assert db.query(Order).filter_by(tenant_id=tenant.id, status=OrderStatus.FAILED).count() == 2
-        rows = db.query(OutboxEvent).filter_by(tenant_id=tenant.id).all()
+        rows = (
+            db.query(OutboxEvent)
+            .filter_by(tenant_id=tenant.id)
+            .filter(OutboxEvent.event_type != EventNames.ORDER_STATUS_CHANGED)
+            .all()
+        )
         assert len(rows) == 4 and all(row.payload["tenant_id"] == str(tenant.id) for row in rows)
+        assert (
+            db.query(OutboxEvent).filter_by(tenant_id=tenant.id, event_type=EventNames.ORDER_STATUS_CHANGED).count()
+            == 4
+        )

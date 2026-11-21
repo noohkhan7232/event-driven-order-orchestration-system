@@ -15,6 +15,7 @@ class DomainEvent(BaseModel):
 
 
 class EventNames:
+    ORDER_STATUS_CHANGED = "order.status_changed"
     ORDER_CREATED = "order.created"
     INVENTORY_RESERVED = "inventory.reserved"
     INVENTORY_FAILED = "inventory.failed"

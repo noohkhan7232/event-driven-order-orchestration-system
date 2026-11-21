@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal, get_principal
+from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models.entities import ApiKey
 from app.schemas.tenancy import ApiKeyCreate, ApiKeyCreated, ApiKeyRead, TenantRead, TenantRegister
@@ -14,8 +15,8 @@ router = APIRouter()
 
 
 @router.post("/tenants/register", response_model=TenantRead, status_code=201)
-def register(payload: TenantRegister, db: Session = Depends(get_db)):
-    return register_tenant(db, payload)
+def register(payload: TenantRegister, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    return register_tenant(db, payload, settings=settings)
 
 
 @router.post("/api-keys", response_model=ApiKeyCreated, status_code=201)
