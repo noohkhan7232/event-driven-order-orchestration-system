@@ -2,10 +2,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal, get_principal
-from app.core.exceptions import AuthorizationError, NotFoundError
+from app.core.exceptions import AuthorizationError, InventoryConflict, NotFoundError, WarehouseCodeConflict
 from app.db.session import get_db
 from app.models.entities import Inventory, Product, Warehouse
 from app.repositories.inventory import InventoryRepository
@@ -14,6 +15,10 @@ from app.schemas.inventory import InventoryCreate, InventoryRead, InventoryUpdat
 from app.services.catalog import CatalogValidationError
 
 router = APIRouter()
+
+
+def is_unique_violation(exc: IntegrityError) -> bool:
+    return getattr(exc.orig, "sqlstate", None) == "23505" or getattr(exc.orig, "sqlite_errorcode", None) in {1555, 2067}
 
 
 def tenant_scope(principal: Principal, scope: str) -> UUID:
@@ -30,7 +35,13 @@ def create_warehouse(
     tenant_id = tenant_scope(principal, "inventory:write")
     warehouse = Warehouse(tenant_id=tenant_id, **payload.model_dump())
     db.add(warehouse)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if is_unique_violation(exc):
+            raise WarehouseCodeConflict("Warehouse code already exists") from exc
+        raise
     db.refresh(warehouse)
     return warehouse
 
@@ -50,7 +61,13 @@ def create_inventory(
         raise CatalogValidationError("product_required", "Inventory requires an existing product")
     item = Inventory(tenant_id=tenant_id, product_name=product.name, **payload.model_dump(exclude={"product_name"}))
     db.add(item)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if is_unique_violation(exc):
+            raise InventoryConflict("Inventory already exists for this product and warehouse") from exc
+        raise
     db.refresh(item)
     return item
 
