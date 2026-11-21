@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from celery import Task
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -9,7 +11,7 @@ from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
-from app.models.entities import FailedJob, Inventory, Order, ProcessedEvent, Tenant
+from app.models.entities import AuditLog, FailedJob, Inventory, Order, ProcessedEvent, Tenant
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus
 from app.observability.metrics import DUPLICATE_EVENTS
 from app.providers.contracts import ProviderDeclined
@@ -17,7 +19,10 @@ from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
+from app.services.payment_sessions import handle_payment
 from app.services.payments import PaymentService
+from app.services.provider_events import process_provider_event
+from app.services.refunds import RefundBusy, record_refund_failure, run_refund
 from app.services.shipping import ShippingService
 from app.workers.celery_app import celery_app
 
@@ -27,7 +32,7 @@ logger = get_logger(__name__)
 class ResilientTask(Task):
     autoretry_for = (TransientError, OperationalError, ConnectionError)
     dont_autoretry_for = (BusinessError,)
-    retry_kwargs = {"max_retries": get_settings().task_max_retries}
+    retry_kwargs: dict[str, int | None] = {"max_retries": get_settings().task_max_retries}
     retry_backoff_max = get_settings().task_retry_backoff_max
     retry_backoff = True
     retry_jitter = True
@@ -67,6 +72,32 @@ class ResilientTask(Task):
         logger.error("task_failed", task=self.name, task_id=task_id, error=str(exc))
 
 
+class RefundTask(ResilientTask):
+    # Lease waits do not consume the durable provider-attempt budget.
+    max_retries = None
+    retry_kwargs = {"max_retries": None}
+
+    def on_failure(self, exc: Exception, task_id: str, args: tuple, kwargs: dict, einfo: object) -> None:
+        try:
+            identity = UUID(args[0] if args else kwargs["refund_id"])
+            with SessionLocal() as db:
+                record_refund_failure(db, identity)
+        except Exception:
+            logger.error("refund_failure_store_unavailable", task_id=task_id)
+
+
+@celery_app.task(bind=True, base=RefundTask, name="app.workers.tasks.process_refund")
+def process_refund(self, refund_id: str) -> None:
+    try:
+        identity = UUID(refund_id)
+    except (ValueError, TypeError):
+        raise BusinessError("Invalid refund identity") from None
+    try:
+        run_refund(SessionLocal, identity)
+    except RefundBusy as busy:
+        raise self.retry(countdown=busy.seconds) from None
+
+
 @celery_app.task(bind=True, base=ResilientTask, name="app.workers.tasks.process_event")
 def process_event(self, raw_event: dict) -> None:
     try:
@@ -76,11 +107,17 @@ def process_event(self, raw_event: dict) -> None:
         raise TransientError("Invalid domain event") from exc
     with SessionLocal() as db:
         try:
+            if event.event_type == "payment.provider_event":
+                process_provider_event(db, event)
+                return
             # Global lock ordering: ORDER first, INVENTORY (SKU, warehouse_id) second.
             order = OrderRepository(db).get_with_details(event.aggregate_id, for_update=True)
             if not order:
                 logger.warning("order_missing_for_event", order_id=str(event.aggregate_id))
                 db.rollback()
+                return
+            if event.event_type in {EventNames.PAYMENT_REQUESTED, EventNames.INVENTORY_RESERVED}:
+                handle_payment(db, order, event, self.request.retries)
                 return
             # sqlite3 legacy transaction mode does not BEGIN for SELECT; without
             # this a released SAVEPOINT could survive a later outer rollback.
@@ -102,6 +139,19 @@ def process_event(self, raw_event: dict) -> None:
                 EventNames.INVENTORY_RESERVED: OrderStatus.INVENTORY_RESERVED,
                 EventNames.PAYMENT_AUTHORIZED: OrderStatus.PAID,
             }
+            if (
+                event.event_type == EventNames.ORDER_STATUS_CHANGED
+                and order.payment_method == "cod"
+                and order.status == OrderStatus.DELIVERED
+                and event.payload.get("to") == "delivered"
+            ):
+                for payment in order.payments:
+                    if payment.provider == "cod" and payment.status == PaymentStatus.INITIATED:
+                        payment.status = PaymentStatus.CAPTURED
+                        payment.provider_status = "collected"
+                        db.add(
+                            AuditLog(entity_type="payment", entity_id=payment.id, action="cod_collected", payload={})
+                        )
             # order.status_changed is informational. Its consumer may record the
             # marker, never transition again (which would create an event loop).
             if event.event_type in expected:
@@ -150,7 +200,7 @@ def _reserve_inventory(db: Session, order: Order, event: DomainEvent | None = No
         _emit(db, order, EventNames.INVENTORY_FAILED, "inventory", event)
         return
     transition(order, OrderStatus.INVENTORY_RESERVED, db=db, correlation_id=trace)
-    _emit(db, order, EventNames.INVENTORY_RESERVED, "payments", event)
+    _emit(db, order, EventNames.PAYMENT_REQUESTED, "payments", event)
 
 
 def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
@@ -171,7 +221,7 @@ def _create_shipment(db: Session, order: Order, event: DomainEvent | None = None
     try:
         ShippingService(db).create_shipment(order)
     except ProviderDeclined:
-        PaymentService(db).refund(order)
+        PaymentService(db).refund(order, reason="SHIPMENT_FAILED", correlation_id=trace)
         InventoryService(db).release_for_order(order)
         transition(order, OrderStatus.FAILED, db=db, reason="SHIPMENT_FAILED", correlation_id=trace)
         _emit(db, order, "shipment.failed", "shipments", event)

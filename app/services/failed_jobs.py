@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import ConflictError, NotFoundError
 from app.domain.order_state import TRANSITIONS, reopen_failed_order, transition
 from app.events.contracts import DomainEvent, EventNames
-from app.models.entities import AuditLog, FailedJob, Order, OutboxEvent, Tenant
+from app.models.entities import AuditLog, FailedJob, Order, OutboxEvent, Refund, Tenant
 from app.models.enums import JobStatus, OrderStatus
 from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
@@ -24,7 +24,7 @@ def record_failure(
     order = OrderRepository(db).get_with_details(event.aggregate_id, for_update=True)
     if order and OrderStatus.FAILED in TRANSITIONS.get(order.status, set()):
         InventoryService(db).release_for_order(order)
-        PaymentService(db).refund(order)
+        PaymentService(db).refund(order, reason="RETRIES_EXHAUSTED", correlation_id=event.correlation_id)
         transition(order, OrderStatus.FAILED, db=db, reason="RETRIES_EXHAUSTED", correlation_id=event.correlation_id)
     job = FailedJob(
         task_name=task_name,
@@ -82,6 +82,12 @@ def replay_failed_job(db: Session, job_id: UUID, *, actor: UUID, tenant_id: UUID
             raise RecoveryConflict("tenant_suspended")
         row: OutboxEvent | None
         if order.status == OrderStatus.FAILED and order.failure_reason == "RETRIES_EXHAUSTED":
+            if db.scalar(
+                select(Refund.id)
+                .where(Refund.order_id == order.id, Refund.tenant_id == order.tenant_id, Refund.status != "succeeded")
+                .limit(1)
+            ):
+                raise RecoveryConflict("refund_pending")
             reopen_failed_order(order, db=db, actor=actor, reason=f"failed_job:{job.id}")
             event = DomainEvent(
                 event_type=EventNames.ORDER_CREATED,

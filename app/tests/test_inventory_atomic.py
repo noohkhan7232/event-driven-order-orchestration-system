@@ -44,6 +44,14 @@ def test_fulfillment_cancel_compensates_shipment_payment_inventory_atomically(db
     assert shipment.status == ShipmentStatus.CANCELLED
     assert db.query(ShipmentEvent).filter_by(status=ShipmentStatus.CANCELLED).count() == 1
     assert db.query(AuditLog).filter_by(action="shipment_cancelled").count() == 1
+    from app.models.entities import Refund
+    from app.workers.tasks import process_refund
+
+    refund = db.query(Refund).one()
+    assert refund.status == "requested" and refund.reason == "ORDER_CANCELLED"
+    assert db.query(Payment).one().status == PaymentStatus.AUTHORIZED
+    assert db.query(OutboxEvent).filter_by(event_type="refund.requested").count() == 1
+    process_refund.run(str(refund.id))
     assert db.query(Payment).one().status == PaymentStatus.REFUNDED
     assert stock.available_quantity == 10 and stock.reserved_quantity == 0
     assert db.query(OutboxEvent).filter_by(event_type="order.cancelled").count() == 1

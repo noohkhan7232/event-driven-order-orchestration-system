@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from app.core.config import Settings
@@ -10,7 +11,13 @@ def test_provider_registry_rejects_unknown_and_nonlocal_mock():
         Settings(_env_file=None, payment_provider="unknown")
     with pytest.raises(ValidationError, match="mock"):
         Settings(_env_file=None, environment="production", secret_key="x" * 32)
-    assert Settings(_env_file=None, environment="production", secret_key="x" * 32, allow_mock_providers=True)
+    assert Settings(
+        _env_file=None,
+        environment="production",
+        secret_key="x" * 32,
+        allow_mock_providers=True,
+        credentials_encryption_key=Fernet.generate_key().decode(),
+    )
 
 
 @pytest.mark.parametrize("kind", ["payment", "shipping"])
@@ -37,7 +44,7 @@ def test_mock_provider_deterministic_references_and_safe_metadata(db, workflow):
 
 
 def test_provider_calls_persist_references_and_idempotency_keys(db, workflow, monkeypatch):
-    from app.providers.contracts import PaymentResult, RefundResult, ShipmentResult
+    from app.providers.contracts import PaymentResult, ProviderRefund, ShipmentResult
     from app.services import payments, shipping
 
     order, _ = workflow
@@ -50,9 +57,9 @@ def test_provider_calls_persist_references_and_idempotency_keys(db, workflow, mo
             calls.append(idempotency_key)
             return PaymentResult(PaymentStatus.AUTHORIZED, "payment-ref", {})
 
-        def refund(self, order, payment, *, idempotency_key):
+        def refund(self, payment, amount_minor, idempotency_key):
             calls.append(idempotency_key)
-            return RefundResult(PaymentStatus.REFUNDED, "refund-ref", {})
+            return ProviderRefund("refund-ref", "processed")
 
     class ShippingAdapter:
         name = "test"
@@ -74,13 +81,22 @@ def test_provider_calls_persist_references_and_idempotency_keys(db, workflow, mo
     db.refresh(order)
     payments.PaymentService(db).refund(order)
     shipping.ShippingService(db).cancel_for_order(order)
-    db.flush()
+    db.commit()
+    from app.models.entities import Refund
+    from app.services import refunds
+    from app.workers.tasks import process_refund
+
+    refund = db.query(Refund).one()
+    assert refund.status == "requested" and payment.status == PaymentStatus.AUTHORIZED
+    monkeypatch.setattr(refunds, "resolve_refund_provider", lambda *args: PaymentAdapter())
+    process_refund.run(str(refund.id))
+    db.refresh(payment)
     assert payment.provider == shipment.provider == "test"
     assert payment.provider_reference == "payment-ref" and shipment.provider_reference == "shipment-ref"
     assert payment.status == PaymentStatus.REFUNDED and shipment.status == ShipmentStatus.CANCELLED
     assert calls == [
         f"{order.id}:authorize:0",
         f"{order.id}:shipment:0",
-        f"{order.id}:refund:{payment.id}",
         f"{order.id}:cancel:{shipment.id}",
+        f"{payment.id}:refund",
     ]

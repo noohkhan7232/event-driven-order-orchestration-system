@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 import pytest
-from test_consumers import consume
+from test_consumers import consume, drain_financial
 
 from app.core.exceptions import ConflictError, NotFoundError, TransientError
 from app.events.contracts import DomainEvent, EventNames
@@ -24,6 +24,10 @@ def test_recovery_reopens_compensated_order_and_finishes_once(db, workflow):
     job = failed_job(db, order)
     old_event = job.event_id
     assert order.status == OrderStatus.FAILED and stock.available_quantity == 10
+    from app.models.entities import Refund
+
+    assert db.query(Refund).one().status == "requested"
+    drain_financial(order)
     assert db.query(Payment).one().status == PaymentStatus.REFUNDED
     row = replay_failed_job(db, job.id, actor=order.customer_id, tenant_id=order.tenant_id)
     assert order.status == OrderStatus.CREATED and order.failure_reason is None

@@ -176,6 +176,32 @@ class Order(UUIDMixin, TimestampMixin, Base):
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text)
+    payment_method: Mapped[str] = mapped_column(String(12), default="prepaid", server_default="prepaid", nullable=False)
+    payment_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def payment_status(self) -> str | None:
+        payment = self.primary_payment
+        return (payment.provider_status or payment.status.value) if payment else None
+
+    def _payment_rank(self, payment: "Payment") -> tuple[int, datetime, uuid.UUID]:
+        prefix = f"{self.id}:payment:"
+        suffix = (payment.idempotency_key or "").removeprefix(prefix)
+        number = int(suffix) if (payment.idempotency_key or "").startswith(prefix) and suffix.isdecimal() else 0
+        return number, payment.created_at, payment.id
+
+    @property
+    def primary_payment(self) -> "Payment | None":
+        sessions = [payment for payment in self.payments if payment.idempotency_key or payment.provider == "cod"]
+        return max(sessions or self.payments, key=self._payment_rank, default=None)
+
+    @property
+    def checkout(self) -> dict | None:
+        if self.payment_method == "prepaid" and self.status == OrderStatus.PAYMENT_PENDING:
+            payment = self.primary_payment
+            if payment and payment.status == PaymentStatus.INITIATED and payment.checkout_payload:
+                return {**payment.checkout_payload, "expires_at": self.payment_expires_at}
+        return None
 
     customer: Mapped[User | None] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
@@ -197,6 +223,24 @@ class OrderItem(UUIDMixin, TimestampMixin, Base):
     order: Mapped[Order] = relationship(back_populates="items")
 
 
+class TenantPaymentConfig(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "tenant_payment_configs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "provider", name="uq_tenant_payment_provider"),
+        CheckConstraint("provider = 'razorpay'", name="ck_payment_config_provider"),
+        CheckConstraint("mode IN ('test', 'live')", name="ck_payment_config_mode"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)
+    key_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    key_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    webhook_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    webhook_public_id: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+
+
 class Payment(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "payments"
     __table_args__ = (Index("ix_payments_order_status", "order_id", "status"),)
@@ -208,6 +252,9 @@ class Payment(UUIDMixin, TimestampMixin, Base):
     status: Mapped[PaymentStatus] = mapped_column(Enum(PaymentStatus), default=PaymentStatus.INITIATED, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     failure_code: Mapped[str | None] = mapped_column(String(80))
+    idempotency_key: Mapped[str | None] = mapped_column(String(100), unique=True)
+    provider_status: Mapped[str | None] = mapped_column(String(40))
+    checkout_payload: Mapped[dict | None] = mapped_column(JSON)
 
     order: Mapped[Order] = relationship(back_populates="payments")
 
@@ -248,6 +295,42 @@ class AuditLog(UUIDMixin, TimestampMixin, Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     action: Mapped[str] = mapped_column(String(120), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class Refund(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "refunds"
+    __table_args__ = (
+        CheckConstraint("status IN ('requested','processing','succeeded','failed')", name="ck_refund_status"),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    order_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orders.id"), nullable=False)
+    payment_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("payments.id"), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    reason: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="requested", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    provider_refund_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(240))
+    correlation_id: Mapped[str | None] = mapped_column(String(255))
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("failed_jobs.id", name="fk_refund_failed_job")
+    )
+
+
+class InboundWebhookEvent(UUIDMixin, Base):
+    __tablename__ = "inbound_webhook_events"
+    __table_args__ = (UniqueConstraint("provider", "provider_event_id", name="uq_inbound_provider_event"),)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="received", nullable=False)
 
 
 class FailedJob(UUIDMixin, TimestampMixin, Base):

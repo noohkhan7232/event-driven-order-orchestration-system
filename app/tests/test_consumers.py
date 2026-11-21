@@ -6,9 +6,39 @@ from app.models.enums import OrderStatus
 from app.workers import tasks
 
 
+def drain_financial(order):
+    from sqlalchemy import select
+    from sqlalchemy.orm import object_session
+
+    from app.models.entities import InboundWebhookEvent, OutboxEvent, Refund
+
+    db = object_session(order)
+    references = {payment.provider_reference for payment in order.payments if payment.provider == "mock"}
+    receipts = list(
+        db.scalars(
+            select(InboundWebhookEvent).where(
+                InboundWebhookEvent.provider == "mock",
+                InboundWebhookEvent.tenant_id == order.tenant_id,
+                InboundWebhookEvent.status == "received",
+            )
+        )
+    )
+    for receipt in receipts:
+        if any(fields["provider_order_id"] in references for fields in receipt.payload["events"]):
+            row = db.scalar(
+                select(OutboxEvent).where(
+                    OutboxEvent.aggregate_id == receipt.id, OutboxEvent.event_type == "payment.provider_event"
+                )
+            )
+            tasks.process_event.run(row.payload)
+    for refund in list(db.scalars(select(Refund).where(Refund.order_id == order.id, Refund.status == "requested"))):
+        tasks.process_refund.run(str(refund.id))
+
+
 def consume(order, kind, event=None):
     event = event or DomainEvent(event_type=kind, aggregate_id=order.id, payload={}, correlation_id="flow-trace")
     tasks.process_event.run(event.model_dump(mode="json"))
+    drain_financial(order)
     return event
 
 
@@ -25,8 +55,10 @@ def test_duplicate_redelivery_has_one_effect_per_step(db, workflow):
     assert (
         db.query(ProcessedEvent).count()
         == db.query(OutboxEvent).filter(OutboxEvent.event_type != EventNames.ORDER_STATUS_CHANGED).count()
-        == 3
+        == 4
     )
+    assert db.query(ProcessedEvent).filter_by(consumer="payment_provider").count() == 1
+    assert db.query(OutboxEvent).filter_by(event_type="payment.provider_event").count() == 1
     assert db.query(OutboxEvent).filter_by(event_type=EventNames.ORDER_STATUS_CHANGED).count() == 4
     assert {row.correlation_id for row in db.query(OutboxEvent)} == {"flow-trace"}
 

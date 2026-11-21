@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from app.core.config import Settings
@@ -17,4 +18,10 @@ def test_local_accepts_demo_secret(environment):
 
 
 def test_production_accepts_strong_secret():
-    assert Settings(_env_file=None, environment="production", secret_key="x" * 32, allow_mock_providers=True)
+    assert Settings(
+        _env_file=None,
+        environment="production",
+        secret_key="x" * 32,
+        allow_mock_providers=True,
+        credentials_encryption_key=Fernet.generate_key().decode(),
+    )

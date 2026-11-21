@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from conftest import DEFAULT_TENANT_ID, TestingSessionLocal, engine
 from sqlalchemy import select
-from test_consumers import consume
+from test_consumers import consume, drain_financial
 
 from app.events.contracts import DomainEvent, EventNames
 from app.models.entities import Order, OrderItem, OutboxEvent, Payment, Shipment
@@ -168,6 +168,8 @@ def test_postgres_concurrent_duplicate_delivery(db, workflow, monkeypatch):
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(run, range(8)))
+        db.expire_all()
+        drain_financial(order)
     db.expire_all()
     assert stock.available_quantity == 9 and stock.reserved_quantity == 1
     assert db.query(Payment).count() == db.query(Shipment).count() == 1

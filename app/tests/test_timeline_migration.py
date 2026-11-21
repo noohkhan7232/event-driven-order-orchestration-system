@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from alembic import command
 from app.core.config import get_settings
-from app.models.entities import DEFAULT_TENANT_ID, Order, User
-from app.models.enums import OrderStatus, UserRole
+from app.models.entities import DEFAULT_TENANT_ID, User
+from app.models.enums import UserRole
 
 
 def legacy_timeline_roundtrip(url, monkeypatch):
@@ -29,16 +29,26 @@ def legacy_timeline_roundtrip(url, monkeypatch):
             )
             db.add(user)
             db.flush()
-            order = Order(
-                tenant_id=DEFAULT_TENANT_ID,
-                customer_id=user.id,
-                principal_scope=f"user:{user.id}",
-                idempotency_key="legacy-timeline",
-                status=OrderStatus.PAID,
-                total_amount=19.99,
-                currency="INR",
+            legacy = sa.Table(
+                "orders",
+                sa.MetaData(),
+                sa.Column("id", sa.Uuid(), primary_key=True),
+                sa.Column("tenant_id", sa.Uuid()),
+                sa.Column("customer_id", sa.Uuid()),
+                autoload_with=engine,
             )
-            db.add(order)
+            db.execute(
+                legacy.insert().values(
+                    id=uuid4(),
+                    tenant_id=DEFAULT_TENANT_ID,
+                    customer_id=user.id,
+                    principal_scope=f"user:{user.id}",
+                    idempotency_key="legacy-timeline",
+                    status="PAID",
+                    total_amount=19.99,
+                    currency="INR",
+                )
+            )
             db.commit()
         command.upgrade(config, "head")
         assert sa.inspect(engine).has_table("order_timeline")

@@ -14,6 +14,7 @@ from app.domain.timeline import record_initial_order
 from app.events.contracts import DomainEvent, EventNames
 from app.models.entities import AuditLog, Order, OrderItem, User
 from app.models.enums import OrderStatus
+from app.providers.resolution import resolve_payment_provider
 from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.schemas.orders import OrderCreate, OrderItemCreate
@@ -61,7 +62,10 @@ class OrderService:
         total = sum((item.unit_price * item.quantity for item in items), Decimal("0.00")).quantize(Decimal("0.01"))
         if total > Decimal("9999999999.99"):
             raise CatalogValidationError("order_total_out_of_range", "Order total exceeds the supported amount")
+        if payload.payment_method == "prepaid":
+            resolve_payment_provider(self.db, tenant_id)
         order = Order(
+            payment_method=payload.payment_method,
             customer_id=customer_id,
             tenant_id=tenant_id,
             principal_scope=principal_scope,
@@ -109,6 +113,8 @@ class OrderService:
     @staticmethod
     def _request_hash(payload: OrderCreate, currency: str | None = None) -> str:
         canonical = payload.model_dump(exclude_none=True)
+        if payload.payment_method == "prepaid":
+            canonical.pop("payment_method", None)
         canonical["currency"] = (payload.currency or currency or "").upper()
         canonical["items"] = sorted(canonical["items"], key=lambda item: (item["sku"], item["quantity"]))
         return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -117,6 +123,7 @@ class OrderService:
         # Legacy rows predate hashes; reconstruct only the validated request fields.
         original_hash = order.request_hash or self._request_hash(
             OrderCreate(
+                payment_method="cod" if order.payment_method == "cod" else "prepaid",
                 currency=order.currency,
                 external_reference=order.external_reference,
                 buyer_name=order.buyer_name,

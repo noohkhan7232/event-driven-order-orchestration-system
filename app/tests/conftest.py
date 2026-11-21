@@ -35,6 +35,13 @@ from app.workers import tasks  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def allow_mock_payments_in_test_workflows(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "allow_mock_providers", True)
+
+
+@pytest.fixture(autouse=True)
 def reset_rate_limit_windows():
     from app.core.ratelimit import get_limiter
 
@@ -137,6 +144,7 @@ def workflow(db, monkeypatch):
         customer_id=user.id,
         idempotency_key=str(uuid4()),
         status=OrderStatus.CREATED,
+        total_amount=10,
     )
     order.items.append(OrderItem(sku="SKU", product_name="Product", quantity=1, unit_price=10))
     db.add_all([stock, order])

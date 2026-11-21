@@ -1,12 +1,14 @@
 from functools import lru_cache
 from typing import Self
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", hide_input_in_errors=True
+    )
 
     app_name: str = "Event-Driven Order Orchestration System"
     environment: str = "local"
@@ -57,6 +59,25 @@ class Settings(BaseSettings):
     sse_ip_connection_limit: int = Field(default=5, ge=1)
     registration_enabled: bool = True
     registration_invite_code: SecretStr | None = Field(default=None, min_length=1)
+    credentials_encryption_key: SecretStr | None = None
+    mock_webhook_secret: SecretStr = SecretStr("local-mock-webhook")
+    mock_payment_auto_complete: bool | None = None
+    mock_refund_fail_attempts: int = Field(default=0, ge=0)
+    payment_window_seconds: int = Field(default=1800, ge=1)
+    refund_lease_seconds: int = Field(default=60, ge=1)
+    public_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
+
+    @field_validator("credentials_encryption_key")
+    @classmethod
+    def validate_encryption_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            from app.core.crypto import credential_ring
+
+            try:
+                credential_ring(value)
+            except (ValueError, UnicodeError):
+                raise ValueError("CREDENTIALS_ENCRYPTION_KEY must contain valid Fernet keys") from None
+        return value
 
     @field_validator("rate_limit_redis_url", mode="before")
     @classmethod
@@ -65,6 +86,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secret(self) -> Self:
+        local = self.environment in {"local", "development", "test"}
+        if self.mock_payment_auto_complete is None:
+            self.mock_payment_auto_complete = local
+        if not local and self.mock_payment_auto_complete:
+            raise ValueError("Mock auto-complete is forbidden outside local/development/test")
         if self.failure_injection_enabled and self.environment not in {"local", "development", "test"}:
             raise ValueError("Failure injection is forbidden outside local/development/test")
         if self.environment not in {"local", "development", "test"} and (
@@ -75,6 +101,8 @@ class Settings(BaseSettings):
             raise ValueError("Unknown provider")
         if self.environment not in {"local", "development", "test"} and not self.allow_mock_providers:
             raise ValueError("Non-local mock providers require ALLOW_MOCK_PROVIDERS=true")
+        if self.environment not in {"local", "development", "test"} and self.credentials_encryption_key is None:
+            raise ValueError("CREDENTIALS_ENCRYPTION_KEY is required outside local/development/test")
         return self
 
 
