@@ -36,3 +36,15 @@ def transition(
             payload={"from": previous.value, "to": new_status.value, "reason": reason},
         )
     )
+
+
+def reopen_failed_order(order: Order, *, db: Session, actor: UUID, reason: str) -> None:
+    if order.status != S.FAILED or order.failure_reason != "RETRIES_EXHAUSTED":
+        raise InvalidTransitionError("Only compensated technical failures can be reopened")
+    order.status = S.CREATED
+    order.failure_reason = None
+    db.add(
+        AuditLog(
+            actor_id=actor, entity_type="order", entity_id=order.id, action="order_reopened", payload={"reason": reason}
+        )
+    )

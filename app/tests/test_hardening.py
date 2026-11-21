@@ -5,7 +5,12 @@ from app.repositories.orders import OrderRepository
 
 
 def test_signup_email_normalizes_before_duplicate_check(client):
-    payload = {"email": "a@example.com", "password": "strong-password", "full_name": "Test User"}
+    payload = {
+        "tenant_slug": "default",
+        "email": "a@example.com",
+        "password": "strong-password",
+        "full_name": "Test User",
+    }
     assert client.post("/api/v1/auth/signup", json=payload).status_code == 201
     response = client.post("/api/v1/auth/signup", json={**payload, "email": "A@example.com"})
     assert response.status_code == 409
@@ -73,6 +78,7 @@ def test_signup_ignores_privileged_role(client):
     response = client.post(
         "/api/v1/auth/signup",
         json={
+            "tenant_slug": "default",
             "email": "escalate@example.com",
             "password": "strong-password",
             "full_name": "Test User",

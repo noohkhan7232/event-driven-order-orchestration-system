@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -15,16 +16,79 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    event,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Mapped, Mapper, mapped_column, relationship, validates
 
 from app.db.base import Base, TimestampMixin, UUIDMixin
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus, ShipmentStatus, UserRole
 
+DEFAULT_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+class Tenant(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "tenants"
+    __table_args__ = (CheckConstraint("status IN ('active', 'suspended')", name="ck_tenant_status"),)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    slug: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    default_currency: Mapped[str] = mapped_column(String(3), default="INR", server_default="INR", nullable=False)
+
+    @validates("slug")
+    def validate_slug(self, key: str, value: str) -> str:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{2,39}", value) or value in {
+            "admin",
+            "api",
+            "www",
+            "app",
+            "system",
+            "health",
+            "metrics",
+        }:
+            raise ValueError("Invalid or reserved tenant slug")
+        return value
+
+
+class Product(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "products"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "sku", name="uq_products_tenant_sku"),
+        CheckConstraint("price >= 0", name="ck_product_price_non_negative"),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    sku: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+
+
+class ApiKey(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "api_keys"
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(12), unique=True, index=True, nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"))
+
 
 class User(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "(is_platform_admin AND tenant_id IS NULL) OR (NOT is_platform_admin AND tenant_id IS NOT NULL)",
+            name="ck_users_tenant_principal",
+        ),
+    )
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("tenants.id"))
+    is_platform_admin: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
 
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -34,11 +98,17 @@ class User(UUIDMixin, TimestampMixin, Base):
 
     orders: Mapped[list["Order"]] = relationship(back_populates="customer")
 
+    def validate_tenancy(self) -> None:
+        if bool(self.is_platform_admin) != (self.tenant_id is None):
+            raise ValueError("Platform admins must have no tenant; every other user requires a tenant")
+
 
 class Warehouse(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "warehouses"
+    __table_args__ = (UniqueConstraint("tenant_id", "code", name="uq_warehouses_tenant_identity"),)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
 
-    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     region: Mapped[str] = mapped_column(String(80), nullable=False)
 
@@ -48,12 +118,13 @@ class Warehouse(UUIDMixin, TimestampMixin, Base):
 class Inventory(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "inventory"
     __table_args__ = (
-        UniqueConstraint("sku", "warehouse_id", name="uq_inventory_sku_warehouse"),
+        UniqueConstraint("tenant_id", "sku", "warehouse_id", name="uq_inventory_tenant_identity"),
         CheckConstraint("available_quantity >= 0", name="ck_inventory_available_non_negative"),
         CheckConstraint("reserved_quantity >= 0", name="ck_inventory_reserved_non_negative"),
         Index("ix_inventory_sku_available", "sku", "available_quantity"),
     )
 
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     sku: Mapped[str] = mapped_column(String(64), nullable=False)
     product_name: Mapped[str] = mapped_column(String(180), nullable=False)
     warehouse_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("warehouses.id"), nullable=False)
@@ -67,12 +138,19 @@ class Inventory(UUIDMixin, TimestampMixin, Base):
 class Order(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "orders"
     __table_args__ = (
-        UniqueConstraint("customer_id", "idempotency_key", name="uq_orders_customer_idempotency_key"),
+        UniqueConstraint("tenant_id", "principal_scope", "idempotency_key", name="uq_orders_tenant_principal_key"),
+        Index("ix_orders_tenant_created", "tenant_id", "created_at"),
         Index("ix_orders_customer_status", "customer_id", "status"),
         Index("ix_orders_created_status", "created_at", "status"),
     )
 
-    customer_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    principal_scope: Mapped[str] = mapped_column(String(50), nullable=False)
+    external_reference: Mapped[str | None] = mapped_column(String(100))
+    buyer_name: Mapped[str | None] = mapped_column(String(120))
+    buyer_email: Mapped[str | None] = mapped_column(String(255))
+    buyer_phone: Mapped[str | None] = mapped_column(String(20))
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=True)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.CREATED, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
     inventory_reserved: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
@@ -81,7 +159,7 @@ class Order(UUIDMixin, TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text)
 
-    customer: Mapped[User] = relationship(back_populates="orders")
+    customer: Mapped[User | None] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     payments: Mapped[list["Payment"]] = relationship(back_populates="order")
     shipments: Mapped[list["Shipment"]] = relationship(back_populates="order")
@@ -106,7 +184,8 @@ class Payment(UUIDMixin, TimestampMixin, Base):
     __table_args__ = (Index("ix_payments_order_status", "order_id", "status"),)
 
     order_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("orders.id"), nullable=False)
-    provider: Mapped[str] = mapped_column(String(60), default="simulation_gateway", nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(40), default="simulation_gateway", nullable=True)
+    provider_reference: Mapped[str | None] = mapped_column(String(120))
     provider_transaction_id: Mapped[str | None] = mapped_column(String(120), unique=True)
     status: Mapped[PaymentStatus] = mapped_column(Enum(PaymentStatus), default=PaymentStatus.INITIATED, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
@@ -120,6 +199,8 @@ class Shipment(UUIDMixin, TimestampMixin, Base):
     __table_args__ = (Index("ix_shipments_order_status", "order_id", "status"),)
 
     order_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("orders.id"), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(40))
+    provider_reference: Mapped[str | None] = mapped_column(String(120))
     carrier: Mapped[str] = mapped_column(String(80), default="internal_fulfillment", nullable=False)
     tracking_number: Mapped[str | None] = mapped_column(String(120), unique=True)
     status: Mapped[ShipmentStatus] = mapped_column(Enum(ShipmentStatus), default=ShipmentStatus.PENDING, nullable=False)
@@ -155,6 +236,7 @@ class FailedJob(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "failed_jobs"
     __table_args__ = (Index("ix_failed_jobs_task_status", "task_name", "status"),)
 
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("tenants.id"))
     task_name: Mapped[str] = mapped_column(String(160), nullable=False)
     queue_name: Mapped[str] = mapped_column(String(80), nullable=False)
     status: Mapped[JobStatus] = mapped_column(
@@ -169,7 +251,11 @@ class FailedJob(UUIDMixin, TimestampMixin, Base):
 
 class OutboxEvent(UUIDMixin, Base):
     __tablename__ = "outbox_events"
-    __table_args__ = (Index("ix_outbox_status_available", "status", "available_at"),)
+    __table_args__ = (
+        Index("ix_outbox_status_available", "status", "available_at"),
+        Index("ix_outbox_tenant_event", "tenant_id", "event_type"),
+    )
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("tenants.id"))
 
     event_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, nullable=False)
     aggregate_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
@@ -191,3 +277,9 @@ class ProcessedEvent(Base):
     consumer: Mapped[str] = mapped_column(String(100), primary_key=True)
     event_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
     processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+@event.listens_for(User, "before_insert")
+@event.listens_for(User, "before_update")
+def validate_user_tenancy(mapper: Mapper[User], connection: Connection, target: User) -> None:
+    target.validate_tenancy()

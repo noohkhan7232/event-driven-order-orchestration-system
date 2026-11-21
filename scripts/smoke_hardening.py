@@ -34,6 +34,11 @@ def main() -> None:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         os.environ.update(env)
+        from app.db.session import SessionLocal
+        from app.models.entities import DEFAULT_TENANT_ID, Product
+
+        with SessionLocal.begin() as db:
+            db.add(Product(tenant_id=DEFAULT_TENANT_ID, sku="SKU", name="Smoke product", price="49.99", currency="USD"))
         server = uvicorn.Server(uvicorn.Config("app.main:app", host="127.0.0.1", port=port, log_level="error"))
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
@@ -58,7 +63,10 @@ def main() -> None:
                     return response
 
                 credentials = {"email": "smoke@example.com", "password": "smoke-password"}
-                signup = call("/api/v1/auth/signup", {**credentials, "full_name": "Smoke User", "role": "admin"})
+                signup = call(
+                    "/api/v1/auth/signup",
+                    {**credentials, "full_name": "Smoke User", "tenant_slug": "default", "role": "admin"},
+                )
                 assert signup.status_code == 201 and signup.json()["role"] == "customer"
                 login = call("/api/v1/auth/login", credentials)
                 assert login.status_code == 200

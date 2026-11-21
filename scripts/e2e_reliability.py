@@ -20,7 +20,17 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models.entities import FailedJob, Inventory, Order, OutboxEvent, Payment, Shipment, Warehouse  # noqa: E402
+from app.models.entities import (  # noqa: E402
+    FailedJob,
+    Inventory,
+    Order,
+    OutboxEvent,
+    Payment,
+    Product,
+    Shipment,
+    User,
+    Warehouse,
+)
 
 
 def experiment(name: str, action: Callable[[], str]) -> bool:
@@ -64,13 +74,20 @@ class Harness:
                 pass
             time.sleep(0.5)
         credentials = {"email": f"e2e-{self.run_id}@example.com", "password": "e2e-demo-password"}
-        response = self.client.post("/api/v1/auth/signup", json={**credentials, "full_name": "E2E Reviewer"})
+        response = self.client.post(
+            "/api/v1/auth/signup", json={**credentials, "full_name": "E2E Reviewer", "tenant_slug": "default"}
+        )
         assert response.status_code == 201, response.text
         login = self.client.post("/api/v1/auth/login", json=credentials)
         assert login.status_code == 200, login.text
         self.headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
         with self.sessions.begin() as db:
-            warehouse = Warehouse(code=f"E2E-{self.run_id}", name="Reliability proof", region="local-test")
+            registered = db.get(User, UUID(response.json()["id"]))
+            assert registered is not None and registered.tenant_id is not None
+            self.tenant_id = registered.tenant_id
+            warehouse = Warehouse(
+                tenant_id=self.tenant_id, code=f"E2E-{self.run_id}", name="Reliability proof", region="local-test"
+            )
             db.add(warehouse)
             db.flush()
             self.warehouse_id = warehouse.id
@@ -78,9 +95,14 @@ class Harness:
     def seed(self, label: str, quantity: int = 10, prefix: str = "") -> str:
         sku = f"{prefix}E2E-{self.run_id}-{label}"
         with self.sessions.begin() as db:
+            db.add(Product(tenant_id=self.tenant_id, sku=sku, name="E2E reliability", price="49.99", currency="USD"))
             db.add(
                 Inventory(
-                    sku=sku, product_name="E2E reliability", warehouse_id=self.warehouse_id, available_quantity=quantity
+                    tenant_id=self.tenant_id,
+                    sku=sku,
+                    product_name="E2E reliability",
+                    warehouse_id=self.warehouse_id,
+                    available_quantity=quantity,
                 )
             )
         return sku
@@ -236,14 +258,25 @@ class Harness:
                 job = db.scalar(select(FailedJob).where(FailedJob.aggregate_id == UUID(order)))
                 assert job and job.payload["event_id"] == str(job.event_id) and job.retry_count == 3
                 job_id = job.id
+                failed_order = db.get(Order, UUID(order))
+                assert failed_order is not None
+                actor = failed_order.customer_id
             code = (
                 "from app.db.session import SessionLocal; from app.services.failed_jobs import replay_failed_job; "
-                f"from uuid import UUID; db=SessionLocal(); replay_failed_job(db,UUID('{job_id}')); db.close()"
+                "from uuid import UUID; db=SessionLocal(); "
+                f"replay_failed_job(db,UUID('{job_id}'),actor=UUID('{actor}')); db.close()"
             )
-            compose("exec", "-T", "api", "python", "-c", code)
-            time.sleep(1)
-            assert self.stock(sku) == (10, 0)
-            return "retries exhausted=3; full failed event persisted; compensated; terminal-safe replay"
+            os.environ["FAILURE_INJECTION_ENABLED"] = "false"
+            try:
+                compose("up", "-d", "--no-deps", "--force-recreate", "worker")
+                compose("exec", "-T", "api", "python", "-c", code)
+                self.poll(order, "fulfillment_requested")
+                assert self.stock(sku) == (9, 1)
+                assert self.count(Payment, [order]) == self.count(Shipment, [order]) == 1
+            finally:
+                os.environ["FAILURE_INJECTION_ENABLED"] = "true"
+                compose("up", "-d", "--no-deps", "--force-recreate", "worker")
+            return "retries exhausted=3; compensated; fresh replay without injection completed; one payment/shipment"
         assert self.stock(sku) == (9, 1)
         assert self.count(Payment, [order]) == self.count(Shipment, [order]) == 1
         return "transient retry succeeds; exactly one reservation/payment/shipment"

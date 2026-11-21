@@ -10,6 +10,7 @@ ignore = ["B008", "UP046"] # FastAPI dependency defaults are intentional.
 "app/tests/*" = ["S101", "S105", "S106"]
 "app/schemas/auth.py" = ["S105"] # The bearer token type is a protocol constant.
 "scripts/e2e_reliability.py" = ["S101"] # Executable reliability assertions.
+"scripts/e2e_tenancy.py" = ["S101"] # Executable tenancy assertions.
 "scripts/smoke_hardening.py" = ["S101"] # Executable verification script.
 "scripts/seed_demo.py" = ["S106"] # Public local demo credentials.
 "app/core/config.py" = ["S105"] # Local defaults; production validation added separately.

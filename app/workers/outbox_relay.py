@@ -12,7 +12,7 @@ from app.core.logging import configure_logging, get_logger
 from app.db.session import SessionLocal
 from app.events.contracts import DomainEvent
 from app.events.publisher import EventPublisher
-from app.models.entities import OutboxEvent
+from app.models.entities import OutboxEvent, ProcessedEvent
 
 logger = get_logger(__name__)
 
@@ -59,6 +59,14 @@ def cleanup_published(db: Session) -> int:
     return result.rowcount
 
 
+def cleanup_processed(db: Session) -> int:
+    now = db.scalar(select(func.now())) or datetime.now(UTC)
+    cutoff = now - timedelta(days=get_settings().processed_events_retention_days)
+    result = db.execute(delete(ProcessedEvent).where(ProcessedEvent.processed_at < cutoff))
+    db.commit()
+    return result.rowcount
+
+
 def main() -> None:
     configure_logging()
     stopped = Event()
@@ -71,6 +79,7 @@ def main() -> None:
                 relay_once(db)
                 if datetime.now(UTC) >= cleanup_at:
                     cleanup_published(db)
+                    cleanup_processed(db)
                     cleanup_at = datetime.now(UTC) + timedelta(hours=1)
         except Exception:
             logger.exception("outbox_relay_error")

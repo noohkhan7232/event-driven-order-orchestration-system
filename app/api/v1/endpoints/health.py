@@ -1,15 +1,13 @@
 import secrets
 
-from fastapi import APIRouter, Depends, Response
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, Depends, Header, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import get_current_user
+from app.auth.principal import AmbiguousCredentials, get_principal
 from app.core.config import Settings, get_settings
-from app.core.exceptions import AuthorizationError, NotFoundError
+from app.core.exceptions import AuthorizationError
 from app.db.session import SessionLocal, get_db
-from app.models.enums import UserRole
 from app.observability.metrics import metrics_response
 
 router = APIRouter()
@@ -27,26 +25,32 @@ def readiness():
     return {"status": "ready", "database": "ok"}
 
 
-@router.get("/metrics")
-def metrics(
+def require_platform_access(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),
-    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
     db: Session = Depends(get_db),
-):
-    if settings.environment not in {"local", "development", "test"}:
-        if not settings.metrics_token:
-            raise NotFoundError("Metrics disabled")
-        if credentials is None:
-            raise AuthorizationError("Metrics credentials required")
-        # Bytes support arbitrary Unicode tokens while retaining constant-time comparison.
-        if not secrets.compare_digest(credentials.credentials.encode(), settings.metrics_token.encode()):
-            user = get_current_user(credentials, db)
-            if user.role != UserRole.ADMIN:
-                raise AuthorizationError("Administrator role required")
+) -> None:
+    if authorization is not None and x_api_key is not None:
+        raise AmbiguousCredentials("Supply exactly one credential")
+    scheme, _, token = (authorization or "").partition(" ")
+    if (
+        settings.metrics_token
+        and scheme.lower() == "bearer"
+        and secrets.compare_digest(token.encode(), settings.metrics_token.encode())
+    ):
+        return
+    principal = get_principal(authorization, x_api_key, db)
+    if not principal.is_platform_admin:
+        raise AuthorizationError("Platform administrator required")
+
+
+@router.get("/metrics", dependencies=[Depends(require_platform_access)])
+def metrics():
     return Response(metrics_response(), media_type="text/plain; version=0.0.4")
 
 
-@router.get("/workers")
+@router.get("/workers", dependencies=[Depends(require_platform_access)])
 def workers():
     return {
         "queues": ["orders", "inventory", "payments", "shipments", "dead_letter"],

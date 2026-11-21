@@ -7,14 +7,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from structlog.contextvars import get_contextvars
 
-from app.core.exceptions import ConflictError, IdempotencyConflictError, NotFoundError
+from app.auth.principal import Principal
+from app.core.exceptions import AuthorizationError, ConflictError, IdempotencyConflictError, NotFoundError
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
 from app.models.entities import AuditLog, Order, OrderItem, User
-from app.models.enums import OrderStatus, UserRole
+from app.models.enums import OrderStatus
 from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.schemas.orders import OrderCreate, OrderItemCreate
+from app.services.catalog import CatalogValidationError, products_for_order
 from app.services.inventory import InventoryService
 from app.services.payments import PaymentService
 from app.services.shipping import ShippingService
@@ -26,27 +28,50 @@ class OrderService:
         self.orders = OrderRepository(db)
         self.outbox = OutboxRepository(db)
 
-    def create_order(self, customer: User, payload: OrderCreate, idempotency_key: str) -> Order:
-        request_hash = self._request_hash(payload)
-        customer_id = customer.id
-        existing = self.orders.get_by_idempotency_key(customer_id, idempotency_key)
+    def create_order(self, customer: User | Principal, payload: OrderCreate, idempotency_key: str) -> Order:
+        principal = customer if isinstance(customer, Principal) else Principal(customer.tenant_id, user=customer)
+        principal.require("orders:write")
+        if principal.tenant_id is None:
+            raise AuthorizationError("A tenant principal is required")
+        tenant_id = principal.tenant_id
+        customer_id = principal.user.id if principal.user else None
+        principal_scope = f"user:{customer_id}" if customer_id else "tenant"
+        existing = self.orders.get_by_idempotency_key(tenant_id, principal_scope, idempotency_key)
         if existing:
-            return self._check_replay(existing, request_hash)
+            return self._check_replay(existing, self._request_hash(payload, existing.currency))
 
-        # Demo pricing is intentionally deterministic; real pricing would call catalog/pricing services.
+        products = products_for_order(self.db, tenant_id, {item.sku for item in payload.items})
+        currencies = {row.currency for row in products.values()}
+        if len(currencies) != 1:
+            raise CatalogValidationError("mixed_currency", "All order items must share one currency")
+        currency = next(iter(currencies))
+        if payload.currency is not None and payload.currency.upper() != currency:
+            raise CatalogValidationError("currency_mismatch", "Order currency must match product currency")
+        request_hash = self._request_hash(payload, currency)
         items = [
             OrderItem(
-                sku=item.sku, product_name="Pending catalog lookup", quantity=item.quantity, unit_price=Decimal("49.99")
+                sku=item.sku,
+                product_name=products[item.sku].name,
+                quantity=item.quantity,
+                unit_price=products[item.sku].price.quantize(Decimal("0.01")),
             )
             for item in payload.items
         ]
-        total = sum((item.unit_price * item.quantity for item in items), Decimal("0.00"))
+        total = sum((item.unit_price * item.quantity for item in items), Decimal("0.00")).quantize(Decimal("0.01"))
+        if total > Decimal("9999999999.99"):
+            raise CatalogValidationError("order_total_out_of_range", "Order total exceeds the supported amount")
         order = Order(
-            customer_id=customer.id,
+            customer_id=customer_id,
+            tenant_id=tenant_id,
+            principal_scope=principal_scope,
             status=OrderStatus.CREATED,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
-            currency=payload.currency.upper(),
+            currency=currency,
+            external_reference=payload.external_reference,
+            buyer_name=payload.buyer_name,
+            buyer_email=payload.buyer_email,
+            buyer_phone=payload.buyer_phone,
             total_amount=total,
             items=items,
         )
@@ -61,6 +86,7 @@ class OrderService:
                 DomainEvent(
                     event_type=EventNames.ORDER_CREATED,
                     aggregate_id=order.id,
+                    tenant_id=order.tenant_id,
                     payload={"order_id": str(order.id)},
                     correlation_id=get_contextvars().get("request_id"),
                 ),
@@ -69,7 +95,7 @@ class OrderService:
             self.db.commit()
         except IntegrityError:
             self.db.rollback()
-            existing = self.orders.get_by_idempotency_key(customer_id, idempotency_key)
+            existing = self.orders.get_by_idempotency_key(tenant_id, principal_scope, idempotency_key)
             if existing is None:
                 raise
             return self._check_replay(existing, request_hash)
@@ -79,9 +105,9 @@ class OrderService:
         return self.orders.get_with_details(order.id) or order
 
     @staticmethod
-    def _request_hash(payload: OrderCreate) -> str:
-        canonical = payload.model_dump()
-        canonical["currency"] = payload.currency.upper()
+    def _request_hash(payload: OrderCreate, currency: str | None = None) -> str:
+        canonical = payload.model_dump(exclude_none=True)
+        canonical["currency"] = (payload.currency or currency or "").upper()
         canonical["items"] = sorted(canonical["items"], key=lambda item: (item["sku"], item["quantity"]))
         return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -90,6 +116,10 @@ class OrderService:
         original_hash = order.request_hash or self._request_hash(
             OrderCreate(
                 currency=order.currency,
+                external_reference=order.external_reference,
+                buyer_name=order.buyer_name,
+                buyer_email=order.buyer_email,
+                buyer_phone=order.buyer_phone,
                 items=[OrderItemCreate(sku=item.sku, quantity=item.quantity) for item in order.items],
             )
         )
@@ -97,17 +127,23 @@ class OrderService:
             raise IdempotencyConflictError("This idempotency key was already used with a different payload")
         return order
 
-    def get_order(self, order_id: UUID, user: User, *, for_update: bool = False) -> Order:
-        order = self.orders.get_with_details(order_id, for_update=for_update)
-        if not order:
+    def get_order(
+        self, order_id: UUID, user: User | Principal, *, for_update: bool = False, scope: str = "orders:read"
+    ) -> Order:
+        principal = user if isinstance(user, Principal) else Principal(user.tenant_id, user=user)
+        if principal.tenant_id is None:
             raise NotFoundError("Order not found")
-        if user.role == UserRole.CUSTOMER and order.customer_id != user.id:
+        order = self.orders.get_with_details(order_id, tenant_id=principal.tenant_id, for_update=for_update)
+        if not order or (principal.is_customer and principal.user and order.customer_id != principal.user.id):
             raise NotFoundError("Order not found")
+        principal.require(scope)
         return order
 
-    def cancel_order(self, order_id: UUID, user: User, reason: str | None = None) -> Order:
+    def cancel_order(self, order_id: UUID, user: User | Principal, reason: str | None = None) -> Order:
+        principal = user if isinstance(user, Principal) else Principal(user.tenant_id, user=user)
+        actor_id = principal.user.id if principal.user else None
         try:
-            order = self.get_order(order_id, user, for_update=True)
+            order = self.get_order(order_id, principal, for_update=True, scope="orders:write")
             if order.status == OrderStatus.CANCELLED:
                 self.db.commit()
                 return order
@@ -116,16 +152,17 @@ class OrderService:
             InventoryService(self.db).release_for_order(order)
             PaymentService(self.db).refund(order)
             ShippingService(self.db).cancel_for_order(order)
-            transition(order, OrderStatus.CANCELLED, db=self.db, reason=reason, actor=user.id)
+            transition(order, OrderStatus.CANCELLED, db=self.db, reason=reason, actor=actor_id)
             self.db.add(
                 AuditLog(
-                    actor_id=user.id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={}
+                    actor_id=actor_id, entity_type="order", entity_id=order.id, action="order_cancelled", payload={}
                 )
             )
             self.outbox.add(
                 DomainEvent(
                     event_type="order.cancelled",
                     aggregate_id=order.id,
+                    tenant_id=order.tenant_id,
                     payload={"order_id": str(order.id)},
                     correlation_id=get_contextvars().get("request_id"),
                 ),

@@ -1,10 +1,11 @@
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.entities import AuditLog, Order, Shipment, ShipmentEvent
 from app.models.enums import ShipmentStatus
+from app.providers.registry import get_shipping_provider
 
 
 class ShippingService:
@@ -12,10 +13,22 @@ class ShippingService:
         self.db = db
 
     def create_shipment(self, order: Order) -> Shipment:
+        provider = get_shipping_provider()
+        attempt = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(AuditLog)
+                .where(AuditLog.entity_id == order.id, AuditLog.action == "order_reopened")
+            )
+            or 0
+        )
+        result = provider.create_shipment(order, idempotency_key=f"{order.id}:shipment:{attempt}")
         shipment = Shipment(
             order_id=order.id,
-            status=ShipmentStatus.CREATED,
-            tracking_number=f"ARC{uuid4().hex[:12].upper()}",
+            status=result.status,
+            provider=provider.name,
+            provider_reference=result.provider_reference,
+            tracking_number=result.provider_reference,
             estimated_delivery_at=datetime.now(UTC) + timedelta(days=4),
         )
         self.db.add(shipment)
@@ -34,4 +47,7 @@ class ShippingService:
     def cancel_for_order(self, order: Order) -> None:
         for shipment in order.shipments:
             if shipment.status != ShipmentStatus.CANCELLED:
+                get_shipping_provider().cancel_shipment(
+                    order, shipment, idempotency_key=f"{order.id}:cancel:{shipment.id}"
+                )
                 self.record_event(shipment, ShipmentStatus.CANCELLED, None, "Order cancelled")

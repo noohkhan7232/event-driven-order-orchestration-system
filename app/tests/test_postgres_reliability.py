@@ -5,7 +5,7 @@ from threading import Barrier, Lock
 from uuid import uuid4
 
 import pytest
-from conftest import TestingSessionLocal, engine
+from conftest import DEFAULT_TENANT_ID, TestingSessionLocal, engine
 from sqlalchemy import select
 from test_consumers import consume
 
@@ -19,6 +19,35 @@ from app.workers import tasks
 pytestmark = pytest.mark.postgres
 
 
+def test_postgres_concurrent_double_replay_has_one_fresh_event(db, workflow):
+    from app.core.exceptions import ConflictError, TransientError
+    from app.services.failed_jobs import record_failure, replay_failed_job
+
+    order, _ = workflow
+    event = DomainEvent(
+        event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, tenant_id=order.tenant_id, payload={}
+    )
+    job = record_failure(db, event.model_dump(mode="json"), TransientError("offline"), 3, "orders", "test")
+    job_id, actor, tenant_id = job.id, order.customer_id, order.tenant_id
+    gate = Barrier(2)
+
+    def replay(_):
+        gate.wait(timeout=30)
+        with TestingSessionLocal() as session:
+            try:
+                replay_failed_job(session, job_id, actor=actor, tenant_id=tenant_id)
+                return "replayed"
+            except ConflictError as exc:
+                return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(replay, range(2)))
+    assert sorted(results) == ["job_already_replayed", "replayed"]
+    db.expire_all()
+    rows = db.query(OutboxEvent).filter_by(aggregate_id=order.id, event_type=EventNames.ORDER_CREATED).all()
+    assert len(rows) == 1 and rows[0].event_id != event.event_id
+
+
 @pytest.fixture(autouse=True)
 def require_real_postgres():
     assert engine.dialect.name == "postgresql", "TEST_DATABASE_URL must select real PostgreSQL"
@@ -28,7 +57,13 @@ def test_postgres_50_reservations_against_stock_10(db, workflow, monkeypatch):
     order, stock = workflow
     orders = [order]
     for _ in range(49):
-        new = Order(customer_id=order.customer_id, idempotency_key=str(uuid4()), status=OrderStatus.CREATED)
+        new = Order(
+            tenant_id=DEFAULT_TENANT_ID,
+            principal_scope=f"user:{order.customer_id}",
+            customer_id=order.customer_id,
+            idempotency_key=str(uuid4()),
+            status=OrderStatus.CREATED,
+        )
         new.items.append(OrderItem(sku="SKU", product_name="Product", quantity=1, unit_price=10))
         db.add(new)
         orders.append(new)
@@ -138,3 +173,62 @@ def test_postgres_inventory_check_constraints_are_enforced(db, workflow):
             db.flush()
     db.refresh(stock)
     assert stock.available_quantity == 10 and stock.reserved_quantity == 0
+
+
+def test_postgres_two_tenants_same_sku_have_independent_stock(db, monkeypatch):
+    from app.models.entities import Inventory, Tenant, User, Warehouse
+    from app.models.enums import UserRole
+
+    tenants = [Tenant(name=f"Store {i}", slug=f"concurrent-{i}") for i in range(2)]
+    db.add_all(tenants)
+    db.flush()
+    stocks, events = [], []
+    for index, tenant in enumerate(tenants):
+        user = User(
+            tenant_id=tenant.id,
+            email=f"parallel-{index}@example.com",
+            full_name="User",
+            hashed_password="hash",
+            role=UserRole.CUSTOMER,
+        )
+        warehouse = Warehouse(tenant_id=tenant.id, code="SAME", name="Warehouse", region="test")
+        db.add_all([user, warehouse])
+        db.flush()
+        stock = Inventory(
+            tenant_id=tenant.id, sku="SHARED", product_name="Snapshot", warehouse_id=warehouse.id, available_quantity=2
+        )
+        db.add(stock)
+        stocks.append(stock)
+        for attempt in range(4):
+            order = Order(
+                tenant_id=tenant.id,
+                principal_scope=f"user:{user.id}",
+                customer_id=user.id,
+                idempotency_key=f"same-{attempt}",
+                status=OrderStatus.CREATED,
+            )
+            order.items.append(OrderItem(sku="SHARED", product_name="Snapshot", quantity=1, unit_price=10))
+            db.add(order)
+            db.flush()
+            events.append(
+                DomainEvent(
+                    event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, tenant_id=tenant.id, payload={}
+                ).model_dump(mode="json")
+            )
+    db.commit()
+    monkeypatch.setattr(tasks, "SessionLocal", TestingSessionLocal)
+    gate = Barrier(8)
+
+    def process(event):
+        gate.wait(timeout=30)
+        tasks.process_event.run(event)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(process, events))
+    db.expire_all()
+    for tenant, stock in zip(tenants, stocks, strict=True):
+        assert stock.available_quantity == 0 and stock.reserved_quantity == 2
+        assert db.query(Order).filter_by(tenant_id=tenant.id, status=OrderStatus.INVENTORY_RESERVED).count() == 2
+        assert db.query(Order).filter_by(tenant_id=tenant.id, status=OrderStatus.FAILED).count() == 2
+        rows = db.query(OutboxEvent).filter_by(tenant_id=tenant.id).all()
+        assert len(rows) == 4 and all(row.payload["tenant_id"] == str(tenant.id) for row in rows)

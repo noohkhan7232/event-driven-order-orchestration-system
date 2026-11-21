@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class WarehouseCreate(BaseModel):
@@ -11,7 +11,7 @@ class WarehouseCreate(BaseModel):
 
 class InventoryCreate(BaseModel):
     sku: str = Field(min_length=1, max_length=64)
-    product_name: str
+    product_name: str | None = None
     warehouse_id: UUID
     available_quantity: int = Field(ge=0)
     low_stock_threshold: int = Field(default=10, ge=0)
@@ -27,3 +27,15 @@ class InventoryRead(BaseModel):
     low_stock_threshold: int
 
     model_config = {"from_attributes": True}
+
+
+class InventoryUpdate(BaseModel):
+    available_quantity: int | None = Field(default=None, ge=0)
+    low_stock_threshold: int | None = Field(default=None, ge=0)
+
+    @field_validator("available_quantity", "low_stock_threshold", mode="before")
+    @classmethod
+    def reject_null(cls, value):
+        if value is None:
+            raise ValueError("Field may be omitted but cannot be null")
+        return value

@@ -50,3 +50,30 @@ def test_status_assignments_only_in_state_machine():
                             and isinstance(target.value, ast.Name)
                             and target.value.id == "order"
                         ), f"Direct order status assignment at {path}:{node.lineno}"
+    module = ast.parse(Path("app/domain/order_state.py").read_text())
+    writers = set()
+    for function in module.body:
+        if isinstance(function, ast.FunctionDef):
+            for node in ast.walk(function):
+                if isinstance(node, ast.Assign) and any(
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "status"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "order"
+                    for target in node.targets
+                ):
+                    writers.add(function.name)
+    assert writers == {"transition", "reopen_failed_order"}
+
+
+@pytest.mark.parametrize("status,reason", [(OrderStatus.CREATED, None), (OrderStatus.FAILED, "PAYMENT_DECLINED")])
+def test_reopen_rejects_uncompensated_or_business_failure(status, reason):
+    from app.core.exceptions import InvalidTransitionError
+    from app.domain.order_state import reopen_failed_order
+
+    order = Order(status=status, failure_reason=reason)
+    db = Mock()
+    with pytest.raises(InvalidTransitionError):
+        reopen_failed_order(order, db=db, actor=uuid4(), reason="operator")
+    assert order.status == status and order.failure_reason == reason
+    db.add.assert_not_called()

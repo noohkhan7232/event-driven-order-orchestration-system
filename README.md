@@ -37,7 +37,7 @@ This educational backend demonstrates the following patterns and their current l
 | Duplicate order requests (retries, double-clicks) | Order creation requires an `Idempotency-Key`; scope and payload checks are described in the project review. Consumers are not yet idempotent. |
 | Slow, blocking order creation | The API commits the order and outbox intent together and returns 202; a relay publishes to RabbitMQ. All heavy work happens asynchronously. |
 | Multi-step workflows that can partially fail | Order → inventory reservation → payment authorization → shipment creation is broken into discrete steps, each independently retryable, with compensation logic (e.g., releasing reserved inventory if payment fails). |
-| Jobs that fail permanently | Failed tasks retry with backoff; if retries are exhausted, failure details are persisted in `failed_jobs`. Business failures compensate without retry. Exhausted technical failures retain their original event for service-level replay. |
+| Jobs that fail permanently | Exhausted retries persist failed jobs and compensate. Operator recovery reopens only technical failures with a fresh event; business failures cannot reopen. |
 | "Is the system healthy?" | Health and metrics endpoints expose API state. The workers endpoint lists static queue and schedule configuration. |
 | Access control | JWT-based authentication with role separation between customer, vendor, and admin. |
 
@@ -137,7 +137,7 @@ http://127.0.0.1:8000/api/v1/openapi.json
 ```bash
 curl -X POST http://localhost:8000/api/v1/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"email":"customer@ordersapp.com","password":"CustomerPass123","full_name":"Demo Customer"}'
+  -d '{"tenant_slug":"default","email":"customer@ordersapp.com","password":"CustomerPass123","full_name":"Demo Customer"}'
 ```
 
 Log in at `POST /api/v1/auth/login` with email and password, then use the returned token:
@@ -153,7 +153,7 @@ curl -X POST http://localhost:8000/api/v1/orders \
   -H "Authorization: Bearer $TOKEN" \
   -H "Idempotency-Key: order-2026-0001" \
   -H "Content-Type: application/json" \
-  -d '{"currency":"USD","items":[{"sku":"SKU-HEADPHONES","quantity":2}]}'
+  -d '{"currency":"INR","items":[{"sku":"SKU-HEADPHONES","quantity":2}]}'
 ```
 
 ### Example Response
@@ -163,7 +163,7 @@ curl -X POST http://localhost:8000/api/v1/orders \
   "id": "7bed0cac-dbc0-4137-986a-42bfada3e0bc",
   "status": "created",
   "total_amount": "99.98",
-  "currency": "USD",
+  "currency": "INR",
   "payments": [],
   "shipments": []
 }
@@ -273,7 +273,7 @@ See [`.env.example`](.env.example). Important values:
 - `CELERY_BROKER_URL`
 - `CELERY_RESULT_BACKEND`
 - `SECRET_KEY` (at least 32 characters and not a known default outside local/development/test)
-- `METRICS_TOKEN` (required to enable metrics outside local/development/test; authenticate with this bearer token or an admin JWT)
+- `METRICS_TOKEN` (authenticate metrics/workers with this token or a platform-admin JWT in every environment; tenant-admin JWTs are denied)
 
 ## Project Review
 
@@ -300,3 +300,54 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 ---
 
 This project demonstrates backend and platform engineering signals that can be verified quickly: FastAPI APIs, PostgreSQL modeling, SQLAlchemy/Alembic, JWT/RBAC, RabbitMQ/Celery workflows, Redis, idempotency, compensation logic, Docker Compose, automated tests, metrics, and worker monitoring.
+# Multi-tenant API quickstart (Phase 3A)
+
+Each seller owns a tenant. JWT staff accounts manage catalog and inventory;
+server integrations use scoped API keys. Customer signup now requires `tenant_slug`.
+Owner email addresses remain globally unique. Public onboarding has no rate limiting
+or captcha yet; **WARNING: add abuse protection before exposing it publicly (Phase 3B).**
+
+Run from PowerShell 7 with Docker Desktop. Set `$env:API_PORT='18000'` if Windows
+already reserves port 8000; otherwise the default is 8000.
+
+```powershell
+docker compose up --build -d
+$port = if ($env:API_PORT) { $env:API_PORT } else { '8000' }
+$base = "http://localhost:$port/api/v1"
+curl.exe -sS "$base/tenants/register" -H 'Content-Type: application/json' -d '{"business_name":"Example Store","slug":"example-store","owner_email":"owner@example.com","owner_password":"replace-this-password","owner_name":"Owner"}'
+$login = curl.exe -sS "$base/auth/login" -H 'Content-Type: application/json' -d '{"email":"owner@example.com","password":"replace-this-password"}' | ConvertFrom-Json
+$jwt = "Authorization: Bearer $($login.access_token)"
+curl.exe -sS "$base/products" -H $jwt -H 'Content-Type: application/json' -d '{"sku":"DEMO","name":"Demo product","price":"19.99","currency":"INR"}'
+$warehouse = curl.exe -sS "$base/inventory/warehouses" -H $jwt -H 'Content-Type: application/json' -d '{"code":"MAIN","name":"Main warehouse","region":"local"}' | ConvertFrom-Json
+$stock = @{sku='DEMO'; warehouse_id=$warehouse.id; available_quantity=20} | ConvertTo-Json -Compress
+curl.exe -sS "$base/inventory" -H $jwt -H 'Content-Type: application/json' -d $stock
+$created = curl.exe -sS "$base/api-keys" -H $jwt -H 'Content-Type: application/json' -d '{"name":"Order integration","scopes":["orders:read","orders:write"]}' | ConvertFrom-Json
+# The full key is returned only here. Keep it in your server's secret store.
+curl.exe -sS "$base/orders" -H "X-API-Key: $($created.key)" -H 'Idempotency-Key: demo-1' -H 'Content-Type: application/json' -d '{"items":[{"sku":"DEMO","quantity":3}],"external_reference":"shop-order-1"}'
+# total_amount=59.97; worker progresses the order asynchronously.
+```
+
+Keys cannot manage users or other keys. Foreign tenant IDs return 404. Platform
+administrators have no tenant and use `/api/v1/admin/tenants` to suspend/activate stores;
+tenant owners cannot use those endpoints. Suspension blocks new requests immediately;
+already accepted events continue processing.
+
+Local demo seeding is `docker compose exec -T api python -m scripts.seed_demo`.
+It creates distinct tenant-owner and platform-admin users, catalog/stock, and prints
+one integration key only when creating it. Demo passwords in that script are public
+local fixtures. Existing users are never automatically elevated.
+
+Prices and names are snapshotted on order items. Unknown/archived SKUs, mixed
+currencies, mismatched supplied currency, and unsupported totals are rejected before
+persistence. Buyer fields stay on orders and are excluded from events and SQL logs.
+
+Recovery uses `replay_failed_job(db, job_id, actor=operator_id, tenant_id=store_id)`;
+only compensated `FAILED/RETRIES_EXHAUSTED` orders reopen. Provider adapters currently
+use mocks only. Production-like environments require explicit `ALLOW_MOCK_PROVIDERS=true`.
+`PROCESSED_EVENTS_RETENTION_DAYS` defaults to 30 and must exceed your maximum
+redelivery/retry window. Failed jobs are retained until an explicit operator policy acts.
+
+Run `python scripts/e2e_reliability.py` followed by `python scripts/e2e_tenancy.py`
+for real-stack E1–E14 and supplements. These leave uniquely named test rows, restart
+selected services, and the tenancy runner restores failure injection to false.
+See [Phase 3A architecture and verification report](docs/reports/phase-3a-report.md).

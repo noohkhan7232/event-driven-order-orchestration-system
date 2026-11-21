@@ -11,6 +11,7 @@ from app.events.contracts import DomainEvent, EventNames
 from app.models.entities import FailedJob, Order, ProcessedEvent
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus
 from app.observability.metrics import DUPLICATE_EVENTS
+from app.providers.contracts import ProviderDeclined
 from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.services.failed_jobs import record_failure
@@ -53,6 +54,7 @@ class ResilientTask(Task):
                             status=JobStatus.FAILED,
                             payload=raw,
                             event_id=parsed.event_id if parsed else None,
+                            tenant_id=parsed.tenant_id if parsed else None,
                             aggregate_id=parsed.aggregate_id if parsed else None,
                             error_message=str(exc),
                             retry_count=self.request.retries,
@@ -113,20 +115,6 @@ def process_event(self, raw_event: dict) -> None:
                         EventNames.PAYMENT_AUTHORIZED: _create_shipment,
                     }[event.event_type]
                     step(db, order, event)
-                    settings = get_settings()
-                    transient_items = [item for item in order.items if item.sku.startswith("FAIL-TRANSIENT-")]
-                    attempts = (
-                        settings.task_max_retries + 1
-                        if any("EXHAUST" in item.sku for item in transient_items)
-                        else settings.failure_transient_attempts
-                    )
-                    if (
-                        settings.failure_injection_enabled
-                        and transient_items
-                        and event.event_type == EventNames.ORDER_CREATED
-                        and self.request.retries < attempts
-                    ):
-                        raise TransientError("Injected transient failure after step effects")
             db.commit()
         except (BusinessError, TransientError, OperationalError):
             db.rollback()
@@ -142,6 +130,7 @@ def _emit(db: Session, order: Order, kind: str, queue: str, event: DomainEvent |
         DomainEvent(
             event_type=kind,
             aggregate_id=order.id,
+            tenant_id=order.tenant_id,
             payload={"order_id": str(order.id), "reason": order.failure_reason},
             correlation_id=event.correlation_id if event else None,
         ),
@@ -162,12 +151,7 @@ def _reserve_inventory(db: Session, order: Order, event: DomainEvent | None = No
 
 def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
     transition(order, OrderStatus.PAYMENT_PENDING, db=db)
-    decline = get_settings().failure_injection_enabled and any(
-        item.sku.startswith("FAIL-PAYMENT-") for item in order.items
-    )
-    payment = (
-        PaymentService(db).authorize(order, simulate_failure=True) if decline else PaymentService(db).authorize(order)
-    )
+    payment = PaymentService(db).authorize(order, retry_attempt=process_event.request.retries)
     if payment.status == PaymentStatus.AUTHORIZED:
         transition(order, OrderStatus.PAID, db=db)
         _emit(db, order, EventNames.PAYMENT_AUTHORIZED, "shipments", event)
@@ -178,13 +162,14 @@ def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = No
 
 
 def _create_shipment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
-    if get_settings().failure_injection_enabled and any(item.sku.startswith("FAIL-SHIPMENT-") for item in order.items):
+    try:
+        ShippingService(db).create_shipment(order)
+    except ProviderDeclined:
         PaymentService(db).refund(order)
         InventoryService(db).release_for_order(order)
         transition(order, OrderStatus.FAILED, db=db, reason="SHIPMENT_FAILED")
         _emit(db, order, "shipment.failed", "shipments", event)
         return
-    ShippingService(db).create_shipment(order)
     transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db)
     _emit(db, order, EventNames.SHIPMENT_CREATED, "shipments", event)
 

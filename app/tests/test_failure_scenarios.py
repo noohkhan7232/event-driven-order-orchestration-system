@@ -9,6 +9,7 @@ from app.core.exceptions import TransientError
 from app.events.contracts import DomainEvent, EventNames
 from app.models.entities import AuditLog, FailedJob, OutboxEvent, Payment, ProcessedEvent, Shipment
 from app.models.enums import OrderStatus, PaymentStatus
+from app.providers import mock
 from app.workers import tasks
 
 
@@ -25,7 +26,7 @@ def test_business_failure_compensates_without_retry(db, workflow, monkeypatch, p
     stock.sku = order.items[0].sku = prefix + "TEST"
     db.commit()
     monkeypatch.setattr(
-        tasks,
+        mock,
         "get_settings",
         lambda: get_settings().model_copy(update={"failure_injection_enabled": True}),
         raising=False,
@@ -47,16 +48,18 @@ def test_transient_injection_then_retry_has_once_only_effects(db, workflow, monk
     stock.sku = order.items[0].sku = "FAIL-TRANSIENT-TEST"
     db.commit()
     monkeypatch.setattr(
-        tasks,
+        mock,
         "get_settings",
         lambda: get_settings().model_copy(update={"failure_injection_enabled": True, "failure_transient_attempts": 1}),
         raising=False,
     )
-    event = DomainEvent(event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, payload={})
+    consume(order, EventNames.ORDER_CREATED)
+    event = DomainEvent(event_type=EventNames.INVENTORY_RESERVED, aggregate_id=order.id, payload={})
     with pytest.raises(TransientError):
         consume(order, event.event_type, event)
-    assert stock.available_quantity == 10
-    assert db.query(ProcessedEvent).count() == 0
+    assert stock.available_quantity == 9 and stock.reserved_quantity == 1
+    assert db.query(ProcessedEvent).count() == 1
+    assert db.query(Payment).count() == 0
     tasks.process_event.push_request(retries=1)
     try:
         consume(order, event.event_type, event)
@@ -64,6 +67,7 @@ def test_transient_injection_then_retry_has_once_only_effects(db, workflow, monk
         tasks.process_event.pop_request()
     consume(order, event.event_type, event)
     assert stock.available_quantity == 9 and stock.reserved_quantity == 1
+    assert db.query(Payment).count() == 1
 
 
 def test_exhaustion_persists_full_event_compensates_and_replay_is_once(db, workflow, monkeypatch):
@@ -90,19 +94,30 @@ def test_exhaustion_persists_full_event_compensates_and_replay_is_once(db, workf
     assert job.event_id == event.event_id and job.aggregate_id == order.id
     assert order.status == OrderStatus.FAILED and not order.inventory_reserved
     assert stock.available_quantity == 10
-    first = replay_failed_job(db, job.id)
-    second = replay_failed_job(db, job.id)
-    assert first.event_id == second.event_id == event.event_id
-    assert db.query(OutboxEvent).filter_by(event_id=event.event_id).count() == 1
+    from app.core.exceptions import ConflictError
+
+    first = replay_failed_job(db, job.id, actor=order.customer_id)
+    with pytest.raises(ConflictError, match="job_already_replayed"):
+        replay_failed_job(db, job.id, actor=order.customer_id)
+    assert first.event_id != event.event_id
+    assert db.query(OutboxEvent).filter_by(event_id=first.event_id).count() == 1
     assert job.status.value == "replayed"
-    consume(order, event.event_type, event)
-    assert stock.available_quantity == 10  # A terminal saga is never resurrected by replay.
+    consume(order, EventNames.ORDER_CREATED, DomainEvent.model_validate(first.payload))
+    consume(order, EventNames.INVENTORY_RESERVED)
+    consume(order, EventNames.PAYMENT_AUTHORIZED)
+    assert order.status == OrderStatus.FULFILLMENT_REQUESTED
+    assert stock.available_quantity == 9 and stock.reserved_quantity == 1
 
 
 def test_signup_duplicate_insert_race_is_conflict(client, monkeypatch):
     from app.repositories.users import UserRepository
 
-    payload = {"email": "race@example.com", "password": "strong-password", "full_name": "Race User"}
+    payload = {
+        "tenant_slug": "default",
+        "email": "race@example.com",
+        "password": "strong-password",
+        "full_name": "Race User",
+    }
     assert client.post("/api/v1/auth/signup", json=payload).status_code == 201
     monkeypatch.setattr(UserRepository, "get_by_email", lambda *a: None)
     assert client.post("/api/v1/auth/signup", json=payload).status_code == 409

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     task_retry_backoff_max: int = Field(default=60, ge=1)
     failure_injection_enabled: bool = False
     failure_transient_attempts: int = Field(default=2, ge=0)
+    payment_provider: str = "mock"
+    shipping_provider: str = "mock"
+    allow_mock_providers: bool = False
+    processed_events_retention_days: int = Field(default=30, ge=1)
 
     @model_validator(mode="after")
     def validate_production_secret(self) -> Self:
@@ -39,6 +43,10 @@ class Settings(BaseSettings):
             self.secret_key in {"change-me", "change-me-in-production"} or len(self.secret_key) < 32
         ):
             raise ValueError("Production secret_key must be at least 32 characters and not a known default")
+        if self.payment_provider != "mock" or self.shipping_provider != "mock":
+            raise ValueError("Unknown provider")
+        if self.environment not in {"local", "development", "test"} and not self.allow_mock_providers:
+            raise ValueError("Non-local mock providers require ALLOW_MOCK_PROVIDERS=true")
         return self
 
 

@@ -1,9 +1,10 @@
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.security import create_access_token, hash_password, verify_password
-from app.core.exceptions import AuthorizationError, ConflictError
-from app.models.entities import User
+from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
+from app.models.entities import Tenant, User
 from app.models.enums import UserRole
 from app.repositories.users import UserRepository
 from app.schemas.auth import UserCreate
@@ -16,9 +17,17 @@ class AuthService:
 
     def register(self, payload: UserCreate) -> User:
         email = payload.email.lower()
+        tenant = self.db.scalar(select(Tenant).where(Tenant.slug == payload.tenant_slug))
+        if tenant is None:
+            raise NotFoundError("Store not found")
+        if tenant.status == "suspended":
+            from app.auth.principal import TenantSuspended
+
+            raise TenantSuspended("Tenant access is suspended")
         if self.users.get_by_email(email):
             raise ConflictError("A user with this email already exists")
         user = User(
+            tenant_id=tenant.id,
             email=email,
             hashed_password=hash_password(payload.password),
             full_name=payload.full_name,
@@ -36,4 +45,6 @@ class AuthService:
         user = self.users.get_by_email(email.lower())
         if not user or not verify_password(password, user.hashed_password):
             raise AuthorizationError("Invalid email or password")
-        return create_access_token(str(user.id), {"role": user.role.value})
+        return create_access_token(
+            str(user.id), {"role": user.role.value, "tid": str(user.tenant_id) if user.tenant_id else None}
+        )

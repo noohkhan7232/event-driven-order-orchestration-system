@@ -40,8 +40,11 @@ def test_relay_commit_failure_rolls_back(db, monkeypatch):
     assert not db.in_transaction()
 
 
-def test_replay_reschedules_original_outbox_and_missing_job_rolls_back(db):
-    event = DomainEvent(event_type=EventNames.ORDER_CREATED, aggregate_id=uuid4(), payload={})
+def test_replay_reschedules_original_outbox_and_missing_job_rolls_back(db, workflow):
+    order, _ = workflow
+    event = DomainEvent(
+        event_type=EventNames.ORDER_CREATED, aggregate_id=order.id, tenant_id=order.tenant_id, payload={}
+    )
     row = OutboxRepository(db).add(event, "orders")
     row.status, row.published_at, row.attempts = "published", datetime.now(UTC), 3
     job = FailedJob(
@@ -54,12 +57,12 @@ def test_replay_reschedules_original_outbox_and_missing_job_rolls_back(db):
     )
     db.add(job)
     db.commit()
-    assert replay_failed_job(db, job.id).id == row.id
+    assert replay_failed_job(db, job.id, actor=order.customer_id).id == row.id
     assert row.status == "pending" and row.attempts == 0 and row.published_at is None
     assert job.status == JobStatus.REPLAYED
     assert db.query(OutboxEvent).count() == 1
     with pytest.raises(NotFoundError):
-        replay_failed_job(db, uuid4())
+        replay_failed_job(db, uuid4(), actor=order.customer_id)
 
 
 def test_failure_hook_fallback_preserves_poison_event(db, workflow, monkeypatch):

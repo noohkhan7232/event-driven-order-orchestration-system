@@ -44,3 +44,4 @@ class JobStatus(StrEnum):
     FAILED = "failed"
     COMPLETED = "completed"
     REPLAYED = "replayed"
+    DISCARDED = "discarded"
