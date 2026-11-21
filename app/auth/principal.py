@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.security import decode_access_token
+from app.core.config import Settings, get_settings
 from app.core.exceptions import AuthorizationError, DomainError
+from app.core.ratelimit import authenticated_policy, enforce
 from app.db.session import get_db
 from app.models.entities import ApiKey, Tenant, User
 from app.models.enums import UserRole
@@ -138,16 +140,26 @@ def authenticate_api_key(key: str, db: Session) -> Principal:
 
 
 def get_principal(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> Principal:
     if authorization is not None and x_api_key is not None:
         raise AmbiguousCredentials("Supply exactly one credential")
     if x_api_key is not None:
-        return authenticate_api_key(x_api_key, db)
+        principal = authenticate_api_key(x_api_key, db)
+        if principal.api_key is None:
+            raise AuthenticationError("Invalid credentials")
+        enforce(request, settings, authenticated_policy(settings), f"key:{principal.api_key.id}")
+        return principal
     if authorization is not None:
         scheme, separator, token = authorization.partition(" ")
         if separator and scheme.lower() == "bearer" and token:
-            return authenticate_jwt(token, db)
+            principal = authenticate_jwt(token, db)
+            if principal.user is None:
+                raise AuthenticationError("Invalid credentials")
+            enforce(request, settings, authenticated_policy(settings), f"user:{principal.user.id}")
+            return principal
     raise AuthenticationError("Invalid credentials")

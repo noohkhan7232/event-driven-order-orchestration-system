@@ -202,6 +202,10 @@ def test_route_registry_has_no_unclassified_routes():
     }
     actual = {(method, route.path) for route in app.routes for method in route.methods}
     assert not actual - (public | tenant | platform)
+    from app.core.config import get_settings
+    from app.core.ratelimit import policies_for
+
+    assert all(policies_for(method, path, get_settings()) for method, path in public)
 
 
 def test_tenant_owner_cannot_read_platform_endpoints(client, db):

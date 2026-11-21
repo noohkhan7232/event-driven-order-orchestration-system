@@ -33,10 +33,24 @@ from app.models.entities import (  # noqa: E402
 from app.models.enums import OrderStatus, UserRole  # noqa: E402
 from app.workers import tasks  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def reset_rate_limit_windows():
+    from app.core.ratelimit import get_limiter
+
+    get_limiter.cache_clear()
+    yield
+    get_limiter.cache_clear()
+
+
 engine = (
     create_engine(test_url, hide_parameters=True, connect_args={"check_same_thread": False})
     if test_url.get_backend_name() == "sqlite"
-    else create_engine(test_url, hide_parameters=True, pool_size=60, max_overflow=0)
+    # Each fixture drops/recreates native enum types. Prepared statements on a
+    # pooled test connection must not retain type OIDs from the previous schema.
+    else create_engine(
+        test_url, hide_parameters=True, pool_size=60, max_overflow=0, connect_args={"prepare_threshold": None}
+    )
 )
 TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 

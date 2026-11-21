@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,34 @@ class Settings(BaseSettings):
     shipping_provider: str = "mock"
     allow_mock_providers: bool = False
     processed_events_retention_days: int = Field(default=30, ge=1)
+    rate_limit_redis_url: str | None = None
+    rate_limit_fail_open: bool = True
+    trusted_proxy_count: int = Field(default=0, ge=0)
+    rate_limit_login_ip_limit: int = Field(default=10, ge=1)
+    rate_limit_login_ip_window_seconds: int = Field(default=60, ge=1)
+    rate_limit_login_email_limit: int = Field(default=5, ge=1)
+    rate_limit_login_email_window_seconds: int = Field(default=900, ge=1)
+    rate_limit_register_limit: int = Field(default=5, ge=1)
+    rate_limit_register_window_seconds: int = Field(default=3600, ge=1)
+    rate_limit_signup_limit: int = Field(default=10, ge=1)
+    rate_limit_signup_window_seconds: int = Field(default=3600, ge=1)
+    rate_limit_authenticated_limit: int = Field(default=600, ge=1)
+    rate_limit_authenticated_window_seconds: int = Field(default=60, ge=1)
+    rate_limit_public_limit: int = Field(default=600, ge=1)
+    rate_limit_public_window_seconds: int = Field(default=60, ge=1)
+    rate_limit_webhook_limit: int = Field(default=600, ge=1)
+    rate_limit_webhook_window_seconds: int = Field(default=60, ge=1)
+    rate_limit_tracking_limit: int = Field(default=60, ge=1)
+    rate_limit_tracking_window_seconds: int = Field(default=60, ge=1)
+    sse_tenant_connection_limit: int = Field(default=10, ge=1)
+    sse_ip_connection_limit: int = Field(default=5, ge=1)
+    registration_enabled: bool = True
+    registration_invite_code: SecretStr | None = Field(default=None, min_length=1)
+
+    @field_validator("rate_limit_redis_url", mode="before")
+    @classmethod
+    def empty_redis_url(cls, value: str | None) -> str | None:
+        return value or None
 
     @model_validator(mode="after")
     def validate_production_secret(self) -> Self:

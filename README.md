@@ -304,8 +304,8 @@ This project demonstrates backend and platform engineering signals that can be v
 
 Each seller owns a tenant. JWT staff accounts manage catalog and inventory;
 server integrations use scoped API keys. Customer signup now requires `tenant_slug`.
-Owner email addresses remain globally unique. Public onboarding has no rate limiting
-or captcha yet; **WARNING: add abuse protection before exposing it publicly (Phase 3B).**
+Owner email addresses remain globally unique. Public onboarding uses rate limits and
+optional invite codes; captcha and email verification remain deferred.
 
 Run from PowerShell 7 with Docker Desktop. Set `$env:API_PORT='18000'` if Windows
 already reserves port 8000; otherwise the default is 8000.
@@ -351,3 +351,39 @@ Run `python scripts/e2e_reliability.py` followed by `python scripts/e2e_tenancy.
 for real-stack E1–E14 and supplements. These leave uniquely named test rows, restart
 selected services, and the tenancy runner restores failure injection to false.
 See [Phase 3A architecture and verification report](docs/reports/phase-3a-report.md).
+
+### Request limits and registration controls
+
+Phase 3B uses first-request fixed windows. Compose configures shared Redis on
+logical DB2 with `RATE_LIMIT_REDIS_URL`; without a configured URL, local/dev/test
+processes use memory. Memory windows are per process and are for local use.
+Non-local deployments without Redis use the documented degraded behavior.
+
+| Requests | Default quota | Identity |
+|---|---|---|
+| Login | 10/minute and 5/15 minutes | Socket IP; normalized email + IP |
+| Tenant registration | 5/hour | IP |
+| Customer signup | 10/hour | IP |
+| Authenticated API | 600/minute across routes | API-key UUID or user UUID |
+| Docs, health, readiness | 600/minute | IP |
+
+Limits and windows have `RATE_LIMIT_*` settings in `.env.example`. A429 response
+contains `Retry-After` seconds and `X-RateLimit-Limit/Remaining/Reset` (Unix seconds).
+Successful quota headers describe the last applied policy; login applies both
+IP and email+IP policies. Fixed windows permit boundary bursts, not a sliding quota.
+Redis count/TTL updates are atomic; quota keys contain SHA256 digests, not emails,
+IP addresses or credential plaintext.
+
+Login/register/signup fail closed with503 when the limiter backend is unavailable.
+Authenticated requests default to fail open (`RATE_LIMIT_FAIL_OPEN=true`); set it
+false to return503 instead. Public health/docs remain available on backend failure.
+Degradation emits `rate_limit_degraded_total` and a log containing policy/mode only.
+
+`TRUSTED_PROXY_COUNT=0` ignores `X-Forwarded-For`. A positive value selects that
+many entries from the right; malformed/short headers fall back to the socket peer.
+Set this only behind a trusted proxy that sanitizes XFF and prevents direct access.
+`REGISTRATION_ENABLED=false` closes new-store registration. Set optional
+`REGISTRATION_INVITE_CODE` in a secret store to require an exact invite match;
+it is never stored or returned by onboarding. Email verification/captcha remain deferred.
+Tracking/SSE configuration and payment-webhook policies are reserved for their
+future routes; those endpoints are not introduced by the rate-limiting task.
