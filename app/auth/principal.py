@@ -100,15 +100,23 @@ def authenticate_jwt(token: str, db: Session) -> Principal:
 
 
 def authenticate_api_key(key: str, db: Session) -> Principal:
-    row = db.scalar(select(ApiKey).where(ApiKey.key_prefix == key[:12]).execution_options(populate_existing=True))
-    candidate = hashlib.sha256(key[12:].encode()).hexdigest()
-    matches = hmac.compare_digest(row.key_hash if row else "0" * 64, candidate)
+    rows = list(
+        db.scalars(
+            select(ApiKey).where(ApiKey.key_prefix.in_([key[:12], key[:17]])).execution_options(populate_existing=True)
+        )
+    )
+    row: ApiKey | None = None
+    for possible in rows:
+        candidate = hashlib.sha256(key[len(possible.key_prefix) :].encode()).hexdigest()
+        if hmac.compare_digest(possible.key_hash, candidate):
+            row = possible
+    if not rows:
+        hmac.compare_digest("0" * 64, hashlib.sha256(key[17:].encode()).hexdigest())
     now = datetime.now(UTC)
     # Comparison always occurs, including malformed/unknown/revoked/expired keys.
     if not (
         KEY_PATTERN.fullmatch(key)
         and row
-        and matches
         and row.revoked_at is None
         and (row.expires_at is None or aware(row.expires_at) > now)
     ):

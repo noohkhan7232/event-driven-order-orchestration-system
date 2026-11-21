@@ -70,7 +70,7 @@ class ApiKey(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "api_keys"
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    key_prefix: Mapped[str] = mapped_column(String(12), unique=True, index=True, nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(24), unique=True, index=True, nullable=False)
     key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

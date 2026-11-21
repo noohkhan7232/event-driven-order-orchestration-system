@@ -48,8 +48,8 @@ def create_api_key(db: Session, principal: Principal, payload: ApiKeyCreate) -> 
         row = ApiKey(
             tenant_id=principal.tenant_id,
             name=payload.name,
-            key_prefix=key[:12],
-            key_hash=hashlib.sha256(key[12:].encode()).hexdigest(),
+            key_prefix=key[:17],
+            key_hash=hashlib.sha256(key[17:].encode()).hexdigest(),
             scopes=list(dict.fromkeys(payload.scopes)),
             expires_at=payload.expires_at,
             created_by=owner.id,

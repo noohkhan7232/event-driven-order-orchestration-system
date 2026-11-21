@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 from app.auth.principal import Principal, get_principal
 from app.core.exceptions import AuthorizationError, InventoryConflict, NotFoundError, WarehouseCodeConflict
 from app.db.session import get_db
-from app.models.entities import Inventory, Product, Warehouse
+from app.models.entities import AuditLog, Inventory, Product, Warehouse
 from app.repositories.inventory import InventoryRepository
 from app.schemas.common import Page
-from app.schemas.inventory import InventoryCreate, InventoryRead, InventoryUpdate, WarehouseCreate
+from app.schemas.inventory import InventoryAdjustment, InventoryCreate, InventoryRead, InventoryUpdate, WarehouseCreate
 from app.services.catalog import CatalogValidationError
 
 router = APIRouter()
@@ -91,8 +91,11 @@ def low_stock(db: Session = Depends(get_db), principal: Principal = Depends(get_
     return rows
 
 
-def scoped_inventory(db: Session, principal: Principal, inventory_id: UUID) -> Inventory:
-    item = db.scalar(select(Inventory).where(Inventory.id == inventory_id, Inventory.tenant_id == principal.tenant_id))
+def scoped_inventory(db: Session, principal: Principal, inventory_id: UUID, *, lock: bool = False) -> Inventory:
+    statement = select(Inventory).where(Inventory.id == inventory_id, Inventory.tenant_id == principal.tenant_id)
+    if lock:
+        statement = statement.with_for_update().execution_options(populate_existing=True)
+    item = db.scalar(statement)
     if item is None:
         raise NotFoundError("Inventory item not found")
     return item
@@ -112,7 +115,7 @@ def update_inventory(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_principal),
 ):
-    item = scoped_inventory(db, principal, inventory_id)
+    item = scoped_inventory(db, principal, inventory_id, lock=True)
     principal.require("inventory:write")
     product = db.scalar(select(Product).where(Product.tenant_id == principal.tenant_id, Product.sku == item.sku))
     if product is None:
@@ -122,3 +125,39 @@ def update_inventory(
         setattr(item, key, value)
     db.commit()
     return item
+
+
+@router.post("/{inventory_id}/adjustments", response_model=InventoryRead)
+def adjust_inventory(
+    inventory_id: UUID,
+    payload: InventoryAdjustment,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> Inventory:
+    try:
+        item = scoped_inventory(db, principal, inventory_id, lock=True)
+        principal.require("inventory:write")
+        old = item.available_quantity
+        new = old + payload.delta
+        if new < 0:
+            raise CatalogValidationError("negative_stock", "Adjustment would make available stock negative")
+        if new > 2147483647:
+            raise CatalogValidationError("stock_out_of_range", "Available stock exceeds the supported integer range")
+        item.available_quantity = new
+        audit_payload = {"old": old, "new": new, "delta": payload.delta, "reason": payload.reason}
+        if principal.api_key:
+            audit_payload["api_key_id"] = str(principal.api_key.id)
+        db.add(
+            AuditLog(
+                actor_id=principal.user.id if principal.user else None,
+                entity_type="inventory",
+                entity_id=item.id,
+                action="inventory_adjusted",
+                payload=audit_payload,
+            )
+        )
+        db.commit()
+        return item
+    except Exception:
+        db.rollback()
+        raise

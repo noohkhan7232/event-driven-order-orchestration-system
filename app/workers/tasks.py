@@ -1,4 +1,5 @@
 from celery import Task
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -8,7 +9,7 @@ from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
-from app.models.entities import FailedJob, Order, ProcessedEvent
+from app.models.entities import FailedJob, Inventory, Order, ProcessedEvent, Tenant
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus
 from app.observability.metrics import DUPLICATE_EVENTS
 from app.providers.contracts import ProviderDeclined
@@ -175,11 +176,41 @@ def _create_shipment(db: Session, order: Order, event: DomainEvent | None = None
 
 
 @celery_app.task(name="app.workers.tasks.check_low_stock")
-def check_low_stock() -> list[str]:
+def check_low_stock() -> dict[str, int]:
+    counts: dict[str, int] = {}
     with SessionLocal() as db:
-        items = InventoryService(db).low_stock_items()
-        logger.warning("low_stock_scan_completed", count=len(items), skus=[item.sku for item in items])
-        return [item.sku for item in items]
+        tenant_cursor = None
+        while True:
+            query = select(Tenant.id).order_by(Tenant.id).limit(100)
+            if tenant_cursor is not None:
+                query = query.where(Tenant.id > tenant_cursor)
+            tenant_ids = list(db.scalars(query))
+            if not tenant_ids:
+                break
+            for tenant_id in tenant_ids:
+                cursor = None
+                count = 0
+                while True:
+                    stock = (
+                        select(Inventory.id)
+                        .where(
+                            Inventory.tenant_id == tenant_id,
+                            Inventory.available_quantity <= Inventory.low_stock_threshold,
+                        )
+                        .order_by(Inventory.id)
+                        .limit(100)
+                    )
+                    if cursor is not None:
+                        stock = stock.where(Inventory.id > cursor)
+                    ids = list(db.scalars(stock))
+                    if not ids:
+                        break
+                    count += len(ids)
+                    cursor = ids[-1]
+                counts[str(tenant_id)] = count
+                logger.warning("low_stock_scan_completed", tenant_id=str(tenant_id), count=count)
+            tenant_cursor = tenant_ids[-1]
+    return counts
 
 
 @celery_app.task(name="app.workers.tasks.detect_delayed_shipments")

@@ -39,3 +39,15 @@ class InventoryUpdate(BaseModel):
         if value is None:
             raise ValueError("Field may be omitted but cannot be null")
         return value
+
+
+class InventoryAdjustment(BaseModel):
+    delta: int = Field(strict=True)
+    reason: str = Field(min_length=1, max_length=200)
+
+    @field_validator("delta")
+    @classmethod
+    def nonzero(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("Delta must be nonzero")
+        return value
