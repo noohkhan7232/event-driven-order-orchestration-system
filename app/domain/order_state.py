@@ -29,7 +29,12 @@ def transition(
     correlation_id: str | None = None,
 ) -> None:
     previous = order.status
-    if new_status not in TRANSITIONS.get(previous, set()):
+    cod_fulfillment = (
+        previous == S.INVENTORY_RESERVED
+        and new_status == S.FULFILLMENT_REQUESTED
+        and getattr(order, "payment_method", None) == "cod"
+    )
+    if new_status not in TRANSITIONS.get(previous, set()) and not cod_fulfillment:
         raise InvalidTransitionError(f"Cannot transition order from {previous.value} to {new_status.value}")
     order.status = new_status
     if reason is not None:

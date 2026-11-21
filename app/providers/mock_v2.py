@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 from threading import Lock
+from typing import ClassVar
 
 from app.core.config import Settings
 from app.providers.contracts import (
@@ -23,13 +24,15 @@ from app.providers.razorpay import parse_signed
 class MockPaymentProviderV2:
     name = "mock"
     verify_and_parse_webhook = staticmethod(parse_signed)
+    _refund_lock: ClassVar = Lock()
+    _attempts: ClassVar[dict[str, int]] = {}
+    _refunds: ClassVar[dict[str, ProviderRefund]] = {}
+    _refund_amounts: ClassVar[dict[str, int]] = {}
+    _lock: ClassVar = Lock()
+    _captures: ClassVar[dict[str, ProviderEvent]] = {}
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._lock = Lock()
-        self._attempts: dict[str, int] = {}
-        self._refunds: dict[str, ProviderRefund] = {}
-        self._captures: dict[str, ProviderEvent] = {}
 
     def create_payment_session(
         self, order: SessionOrder, payment: PaymentAttempt, idempotency_key: str
@@ -82,8 +85,13 @@ class MockPaymentProviderV2:
         return headers, body
 
     def refund(self, payment: PaymentAttempt, amount_minor: int, idempotency_key: str) -> ProviderRefund:
-        rid = reference(idempotency_key)
-        with self._lock:
+        rid = reference(f"{payment.id}:{idempotency_key}")
+        with self._refund_lock:
+            if type(amount_minor) is not int or amount_minor <= 0:
+                raise ProviderDeclined("Invalid refund amount")
+            if rid in self._refund_amounts and self._refund_amounts[rid] != amount_minor:
+                raise ProviderDeclined("Refund idempotency conflict")
+            self._refund_amounts[rid] = amount_minor
             if rid not in self._refunds:
                 attempts = self._attempts.get(rid, 0)
                 self._attempts[rid] = attempts + 1
@@ -93,7 +101,7 @@ class MockPaymentProviderV2:
             return self._refunds[rid]
 
     def fetch_refund(self, provider_refund_id: str) -> ProviderRefund:
-        with self._lock:
+        with self._refund_lock:
             if provider_refund_id not in self._refunds:
                 raise ProviderDeclined("Refund not found")
             return self._refunds[provider_refund_id]

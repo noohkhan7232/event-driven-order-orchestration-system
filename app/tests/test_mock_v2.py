@@ -20,11 +20,16 @@ def test_mock_v2_signed_capture_deterministic_sessions_and_refund_retry():
     (notice,) = provider.verify_and_parse_webhook(headers, body, provider.settings.mock_webhook_secret)
     assert notice.amount_minor == 1200 and notice.provider_order_id == session.provider_order_id
     assert provider.fetch_payment_status(session.provider_order_id) == [notice]
+    assert MockPaymentProviderV2(provider.settings).fetch_payment_status(session.provider_order_id) == [notice]
     assert provider.fetch_payment_status("absent") == []
     with pytest.raises(ProviderUnavailable):
         provider.refund(payment, 1200, "same")
     result = provider.refund(payment, 1200, "same")
     assert result == provider.refund(payment, 1200, "same") == provider.fetch_refund(result.provider_refund_id)
+    assert MockPaymentProviderV2(provider.settings).refund(payment, 1200, "same") == result
+    for amount in [0, 100]:
+        with pytest.raises(ProviderDeclined):
+            provider.refund(payment, amount, "same")
     with pytest.raises(ProviderDeclined):
         provider.fetch_refund("absent")
 

@@ -1,4 +1,6 @@
+from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -12,6 +14,7 @@ class OrderItemCreate(BaseModel):
 
 
 class OrderCreate(BaseModel):
+    payment_method: Literal["prepaid", "cod"] = "prepaid"
     items: list[OrderItemCreate] = Field(min_length=1, max_length=100)
     currency: str | None = Field(default=None, pattern=r"^[A-Za-z]{3}$")
     external_reference: str | None = Field(default=None, min_length=1, max_length=100)
@@ -51,7 +54,20 @@ class ShipmentRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CheckoutRead(BaseModel):
+    provider: str
+    provider_order_id: str
+    key_id: str
+    amount_minor: int
+    currency: str
+    expires_at: datetime
+
+
 class OrderRead(BaseModel):
+    payment_method: Literal["prepaid", "cod"]
+    payment_status: str | None
+    payment_expires_at: datetime | None
+    checkout: CheckoutRead | None
     external_reference: str | None
     buyer_name: str | None
     buyer_email: str | None

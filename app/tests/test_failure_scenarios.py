@@ -22,6 +22,13 @@ def test_failure_injection_forbidden_in_production():
     "prefix,reason", [("FAIL-PAYMENT-", "PAYMENT_DECLINED"), ("FAIL-SHIPMENT-", "SHIPMENT_FAILED")]
 )
 def test_business_failure_compensates_without_retry(db, workflow, monkeypatch, prefix, reason):
+    from app.services import payment_sessions
+
+    monkeypatch.setattr(
+        payment_sessions,
+        "get_settings",
+        lambda: get_settings().model_copy(update={"failure_injection_enabled": True, "allow_mock_providers": True}),
+    )
     order, stock = workflow
     stock.sku = order.items[0].sku = prefix + "TEST"
     db.commit()
@@ -44,6 +51,15 @@ def test_business_failure_compensates_without_retry(db, workflow, monkeypatch, p
 
 
 def test_transient_injection_then_retry_has_once_only_effects(db, workflow, monkeypatch):
+    from app.services import payment_sessions
+
+    monkeypatch.setattr(
+        payment_sessions,
+        "get_settings",
+        lambda: get_settings().model_copy(
+            update={"failure_injection_enabled": True, "failure_transient_attempts": 1, "allow_mock_providers": True}
+        ),
+    )
     order, stock = workflow
     stock.sku = order.items[0].sku = "FAIL-TRANSIENT-TEST"
     db.commit()
@@ -59,7 +75,9 @@ def test_transient_injection_then_retry_has_once_only_effects(db, workflow, monk
         consume(order, event.event_type, event)
     assert stock.available_quantity == 9 and stock.reserved_quantity == 1
     assert db.query(ProcessedEvent).count() == 1
-    assert db.query(Payment).count() == 0
+    assert db.query(Payment).count() == 1
+    assert db.query(Payment).one().status == PaymentStatus.INITIATED
+    assert order.status == OrderStatus.PAYMENT_PENDING
     tasks.process_event.push_request(retries=1)
     try:
         consume(order, event.event_type, event)

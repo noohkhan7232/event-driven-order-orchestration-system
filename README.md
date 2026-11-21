@@ -406,7 +406,7 @@ After starting the local stack with mock providers, run
 `python scripts/verify_rate_timeline.py` for a real API/broker/worker/Redis smoke.
 It checks quota headers, ordered history, four consumed status intents and
 idempotent replay, and leaves uniquely named local verification rows.
-Async payments, credentials and the Part 2 public surface are separate tasks.
+The session foundation and tenant credentials are documented below.
 
 ### Tenant payment credentials
 
@@ -432,3 +432,44 @@ processes and the secret store. Retain keys required by backups. Never print key
 decrypted credentials or tokens in commands/logs. The configuration migration
 refuses downgrade while credential rows exist; archive them under your retention
 policy before removing the table.
+
+### Payment sessions and COD
+
+Orders accept `payment_method` as `prepaid` (default) or `cod`. Default prepaid
+requests retain their existing idempotency fingerprints. A changed payment method
+conflicts with an existing request key. Prepaid intake requires an active owned
+Razorpay configuration or explicit local `ALLOW_MOCK_PROVIDERS=true` permission.
+COD intake remains available without payment credentials.
+
+Inventory reservation emits `payment.requested`. The handler first locks the order,
+creates a durable payment attempt and PAYMENT_PENDING transition, sets the payment
+window, then commits. It passes detached inputs to the provider after releasing
+locks. A final transaction saves checkout data only while the order remains pending
+and the attempt has no provider reference. Retries retain the attempt and its key.
+Recovery after a compensated failure creates a new numbered attempt. Cancellation
+during the call discards the returned session. Legacy inventory.reserved messages
+remain accepted for existing queued work.
+
+Pending prepaid responses expose payment_method, payment_status, payment_expires_at,
+and checkout containing provider, provider_order_id, public key_id, amount_minor,
+currency and expires_at. Checkout disappears after the order leaves pending state.
+Razorpay is limited to INR, uses integer paise and checks the exact receipt before
+creating a session. Refund adapter calls use receipt lookup and the documented
+X-Refund-Idempotency header. Adapter errors exclude provider response bodies.
+
+The local mock signs synthetic captures and parses them through the normalized
+provider-event contract before applying the shared capture handler. Set
+`MOCK_PAYMENT_AUTO_COMPLETE=false` to inspect a pending session. Auto-complete is
+forbidden outside local/development/test. `MOCK_REFUND_FAIL_ATTEMPTS` defaults to0.
+Its simulation state is process-local and survives adapter re-resolution within
+that process. `MOCK_WEBHOOK_SECRET` configures its signing secret.
+`PAYMENT_WINDOW_SECONDS` defaults to1800.
+
+COD creates a pending-collection payment and shipment without a checkout session.
+Its state transition permits INVENTORY_RESERVED directly to FULFILLMENT_REQUESTED
+only for COD. Delivery status notifications mark the payment collected once.
+Cancellation releases stock and cancels its shipment in the existing transaction.
+
+Inbound webhook HTTP delivery, durable refund orchestration, expiry scheduling and
+reconciliation belong to the remaining saga tasks. Until those are installed,
+real prepaid sessions await those integrations before completing the order.

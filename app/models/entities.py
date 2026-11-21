@@ -176,6 +176,21 @@ class Order(UUIDMixin, TimestampMixin, Base):
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text)
+    payment_method: Mapped[str] = mapped_column(String(12), default="prepaid", server_default="prepaid", nullable=False)
+    payment_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def payment_status(self) -> str | None:
+        payment = max(self.payments, key=lambda p: (p.created_at, p.id), default=None)
+        return (payment.provider_status or payment.status.value) if payment else None
+
+    @property
+    def checkout(self) -> dict | None:
+        if self.payment_method == "prepaid" and self.status == OrderStatus.PAYMENT_PENDING:
+            for payment in self.payments:
+                if payment.status == PaymentStatus.INITIATED and payment.checkout_payload:
+                    return {**payment.checkout_payload, "expires_at": self.payment_expires_at}
+        return None
 
     customer: Mapped[User | None] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
@@ -226,6 +241,9 @@ class Payment(UUIDMixin, TimestampMixin, Base):
     status: Mapped[PaymentStatus] = mapped_column(Enum(PaymentStatus), default=PaymentStatus.INITIATED, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     failure_code: Mapped[str | None] = mapped_column(String(80))
+    idempotency_key: Mapped[str | None] = mapped_column(String(100), unique=True)
+    provider_status: Mapped[str | None] = mapped_column(String(40))
+    checkout_payload: Mapped[dict | None] = mapped_column(JSON)
 
     order: Mapped[Order] = relationship(back_populates="payments")
 

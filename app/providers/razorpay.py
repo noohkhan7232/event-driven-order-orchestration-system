@@ -5,7 +5,7 @@ import hmac
 import json
 import re
 from collections.abc import Mapping
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from pydantic import SecretStr
@@ -81,10 +81,10 @@ class RazorpayProvider:
     name = "razorpay"
     verify_and_parse_webhook = staticmethod(parse_signed)
 
-    def __init__(self, key_id: str, key_secret: SecretStr, transport: httpx.BaseTransport | None = None):
+    def __init__(self, key_id: str, key_secret: SecretStr, transport: httpx.BaseTransport | None = None) -> None:
         self.key_id, self._secret, self._transport = key_id, key_secret, transport
 
-    def _request(self, method: str, path: str, **kwargs) -> dict:
+    def _request(self, method: str, path: str, **kwargs: Any) -> dict:
         try:
             with httpx.Client(
                 base_url="https://api.razorpay.com/v1/",

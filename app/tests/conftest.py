@@ -35,6 +35,13 @@ from app.workers import tasks  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def allow_mock_payments_in_test_workflows(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "allow_mock_providers", True)
+
+
+@pytest.fixture(autouse=True)
 def reset_rate_limit_windows():
     from app.core.ratelimit import get_limiter
 

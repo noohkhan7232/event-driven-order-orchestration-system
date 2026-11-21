@@ -9,7 +9,7 @@ from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
-from app.models.entities import FailedJob, Inventory, Order, ProcessedEvent, Tenant
+from app.models.entities import AuditLog, FailedJob, Inventory, Order, ProcessedEvent, Tenant
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus
 from app.observability.metrics import DUPLICATE_EVENTS
 from app.providers.contracts import ProviderDeclined
@@ -17,6 +17,7 @@ from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
+from app.services.payment_sessions import handle_payment
 from app.services.payments import PaymentService
 from app.services.shipping import ShippingService
 from app.workers.celery_app import celery_app
@@ -82,6 +83,9 @@ def process_event(self, raw_event: dict) -> None:
                 logger.warning("order_missing_for_event", order_id=str(event.aggregate_id))
                 db.rollback()
                 return
+            if event.event_type in {EventNames.PAYMENT_REQUESTED, EventNames.INVENTORY_RESERVED}:
+                handle_payment(db, order, event, self.request.retries)
+                return
             # sqlite3 legacy transaction mode does not BEGIN for SELECT; without
             # this a released SAVEPOINT could survive a later outer rollback.
             if db.get_bind().dialect.name == "sqlite":
@@ -102,6 +106,19 @@ def process_event(self, raw_event: dict) -> None:
                 EventNames.INVENTORY_RESERVED: OrderStatus.INVENTORY_RESERVED,
                 EventNames.PAYMENT_AUTHORIZED: OrderStatus.PAID,
             }
+            if (
+                event.event_type == EventNames.ORDER_STATUS_CHANGED
+                and order.payment_method == "cod"
+                and order.status == OrderStatus.DELIVERED
+                and event.payload.get("to") == "delivered"
+            ):
+                for payment in order.payments:
+                    if payment.provider == "cod" and payment.status == PaymentStatus.INITIATED:
+                        payment.status = PaymentStatus.CAPTURED
+                        payment.provider_status = "collected"
+                        db.add(
+                            AuditLog(entity_type="payment", entity_id=payment.id, action="cod_collected", payload={})
+                        )
             # order.status_changed is informational. Its consumer may record the
             # marker, never transition again (which would create an event loop).
             if event.event_type in expected:
@@ -150,7 +167,7 @@ def _reserve_inventory(db: Session, order: Order, event: DomainEvent | None = No
         _emit(db, order, EventNames.INVENTORY_FAILED, "inventory", event)
         return
     transition(order, OrderStatus.INVENTORY_RESERVED, db=db, correlation_id=trace)
-    _emit(db, order, EventNames.INVENTORY_RESERVED, "payments", event)
+    _emit(db, order, EventNames.PAYMENT_REQUESTED, "payments", event)
 
 
 def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = None) -> None:

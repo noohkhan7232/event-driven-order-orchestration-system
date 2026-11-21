@@ -8,7 +8,9 @@ from app.models.entities import Order, OrderTimeline
 from app.models.enums import OrderStatus
 from app.repositories.outbox import OutboxRepository
 
-PUBLIC_REASON_CODES = frozenset({"INSUFFICIENT_INVENTORY", "PAYMENT_DECLINED", "SHIPMENT_FAILED", "RETRIES_EXHAUSTED"})
+PUBLIC_REASON_CODES = frozenset(
+    {"INSUFFICIENT_INVENTORY", "PAYMENT_DECLINED", "PAYMENT_SESSION_FAILED", "SHIPMENT_FAILED", "RETRIES_EXHAUSTED"}
+)
 
 
 def safe_event_reason(reason: str | None) -> str | None:
