@@ -102,7 +102,6 @@ def accept_webhook(
             select(TenantPaymentConfig).where(
                 TenantPaymentConfig.provider == provider,
                 TenantPaymentConfig.webhook_public_id == public_id,
-                TenantPaymentConfig.is_active.is_(True),
             )
         )
         if config is None or provider != "razorpay":

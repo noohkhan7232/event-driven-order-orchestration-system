@@ -286,6 +286,25 @@ class AuditLog(UUIDMixin, TimestampMixin, Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
+class Refund(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "refunds"
+    __table_args__ = (
+        CheckConstraint("status IN ('requested','processing','succeeded','failed')", name="ck_refund_status"),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    order_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orders.id"), nullable=False)
+    payment_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("payments.id"), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    reason: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="requested", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    provider_refund_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(240))
+    correlation_id: Mapped[str | None] = mapped_column(String(255))
+
+
 class InboundWebhookEvent(UUIDMixin, Base):
     __tablename__ = "inbound_webhook_events"
     __table_args__ = (UniqueConstraint("provider", "provider_event_id", name="uq_inbound_provider_event"),)

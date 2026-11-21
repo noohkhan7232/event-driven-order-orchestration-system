@@ -70,6 +70,16 @@ def test_inbound_receipt_and_intent_are_durable_sanitized_and_deduplicated(clien
     assert "synthetic-hook" not in response.text + caplog.text
 
 
+def test_deactivated_configuration_still_accepts_verified_financial_callbacks(client, db, webhook):
+    from app.models.entities import TenantPaymentConfig
+
+    row = db.query(TenantPaymentConfig).filter_by(tenant_id=webhook[1]).one()
+    row.is_active = False
+    db.commit()
+    body, headers = signed()
+    assert client.post(webhook[0], content=body, headers=headers).status_code == 200
+
+
 @pytest.mark.parametrize("case", ["missing", "wrong", "changed", "event_missing", "malformed", "oversized"])
 def test_inbound_bad_signatures_and_bodies_persist_nothing(client, db, webhook, case):
     from app.models.entities import InboundWebhookEvent, OutboxEvent

@@ -19,6 +19,7 @@ from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
 from app.services.payment_sessions import handle_payment
 from app.services.payments import PaymentService
+from app.services.provider_events import process_provider_event
 from app.services.shipping import ShippingService
 from app.workers.celery_app import celery_app
 
@@ -77,6 +78,9 @@ def process_event(self, raw_event: dict) -> None:
         raise TransientError("Invalid domain event") from exc
     with SessionLocal() as db:
         try:
+            if event.event_type == "payment.provider_event":
+                process_provider_event(db, event)
+                return
             # Global lock ordering: ORDER first, INVENTORY (SKU, warehouse_id) second.
             order = OrderRepository(db).get_with_details(event.aggregate_id, for_update=True)
             if not order:

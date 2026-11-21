@@ -156,8 +156,8 @@ def test_tenant_resource_isolation_matrix(client, db, role):
 def test_route_registry_has_no_unclassified_routes():
     from app.main import app
 
+    public_webhook = {("POST", "/api/v1/webhooks/payments/{provider}/{webhook_public_id}")}
     public = {
-        ("POST", "/api/v1/webhooks/payments/{provider}/{webhook_public_id}"),
         ("GET", "/docs"),
         ("HEAD", "/docs"),
         ("GET", "/docs/oauth2-redirect"),
@@ -205,11 +205,11 @@ def test_route_registry_has_no_unclassified_routes():
         ("POST", "/api/v1/admin/tenants/{tenant_id}/activate"),
     }
     actual = {(method, route.path) for route in app.routes for method in route.methods}
-    assert not actual - (public | tenant | platform)
+    assert not actual - (public | public_webhook | tenant | platform)
     from app.core.config import get_settings
     from app.core.ratelimit import policies_for
 
-    assert all(policies_for(method, path, get_settings()) for method, path in public)
+    assert all(policies_for(method, path, get_settings()) for method, path in public | public_webhook)
 
 
 def test_tenant_owner_cannot_read_platform_endpoints(client, db):
