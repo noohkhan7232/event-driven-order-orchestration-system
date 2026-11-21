@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     registration_enabled: bool = True
     registration_invite_code: SecretStr | None = Field(default=None, min_length=1)
     credentials_encryption_key: SecretStr | None = None
+    mock_webhook_secret: SecretStr = SecretStr("local-mock-webhook")
+    mock_payment_auto_complete: bool | None = None
+    mock_refund_fail_attempts: int = Field(default=0, ge=0)
+    payment_window_seconds: int = Field(default=1800, ge=1)
     public_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
 
     @field_validator("credentials_encryption_key")
@@ -81,6 +85,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secret(self) -> Self:
+        local = self.environment in {"local", "development", "test"}
+        if self.mock_payment_auto_complete is None:
+            self.mock_payment_auto_complete = local
+        if not local and self.mock_payment_auto_complete:
+            raise ValueError("Mock auto-complete is forbidden outside local/development/test")
         if self.failure_injection_enabled and self.environment not in {"local", "development", "test"}:
             raise ValueError("Failure injection is forbidden outside local/development/test")
         if self.environment not in {"local", "development", "test"} and (
