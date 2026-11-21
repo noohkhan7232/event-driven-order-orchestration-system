@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from app.core.config import Settings
@@ -10,7 +11,13 @@ def test_provider_registry_rejects_unknown_and_nonlocal_mock():
         Settings(_env_file=None, payment_provider="unknown")
     with pytest.raises(ValidationError, match="mock"):
         Settings(_env_file=None, environment="production", secret_key="x" * 32)
-    assert Settings(_env_file=None, environment="production", secret_key="x" * 32, allow_mock_providers=True)
+    assert Settings(
+        _env_file=None,
+        environment="production",
+        secret_key="x" * 32,
+        allow_mock_providers=True,
+        credentials_encryption_key=Fernet.generate_key().decode(),
+    )
 
 
 @pytest.mark.parametrize("kind", ["payment", "shipping"])

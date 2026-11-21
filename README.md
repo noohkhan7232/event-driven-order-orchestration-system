@@ -407,3 +407,28 @@ After starting the local stack with mock providers, run
 It checks quota headers, ordered history, four consumed status intents and
 idempotent replay, and leaves uniquely named local verification rows.
 Async payments, credentials and the Part 2 public surface are separate tasks.
+
+### Tenant payment credentials
+
+Tenant owners use JWT authentication for `PUT/GET/DELETE
+/api/v1/settings/payments/razorpay`. API keys, vendors, customers and platform
+administrators cannot manage these settings. PUT accepts key_id, key_secret,
+webhook_secret and mode (test/live). Responses expose only the key ID's last four
+characters, the public webhook identifier/URL, mode and active flag. DELETE
+deactivates the configuration. The webhook URL is reserved until the inbound
+payment webhook task is implemented; do not connect provider delivery yet.
+
+Set `CREDENTIALS_ENCRYPTION_KEY` through your secret store to a Fernet key before
+storing credentials, including locally. It is required outside local/dev/test.
+No generated fallback key is persisted. Set `PUBLIC_BASE_URL` to your externally
+reachable application origin (default http://localhost:8000).
+
+For key rotation, deploy a comma-separated Fernet key ring with the new key first
+and existing keys after it. MultiFernet encrypts new writes with the first key and
+decrypts with all configured keys. In a controlled maintenance transaction, use
+`CredentialVault.rotate()` on each key_secret_enc and webhook_secret_enc, verify
+decryption under the new key, commit, and only then retire old keys from all
+processes and the secret store. Retain keys required by backups. Never print keys,
+decrypted credentials or tokens in commands/logs. The configuration migration
+refuses downgrade while credential rows exist; archive them under your retention
+policy before removing the table.

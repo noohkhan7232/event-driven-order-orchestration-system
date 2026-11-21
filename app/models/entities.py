@@ -197,6 +197,24 @@ class OrderItem(UUIDMixin, TimestampMixin, Base):
     order: Mapped[Order] = relationship(back_populates="items")
 
 
+class TenantPaymentConfig(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "tenant_payment_configs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "provider", name="uq_tenant_payment_provider"),
+        CheckConstraint("provider = 'razorpay'", name="ck_payment_config_provider"),
+        CheckConstraint("mode IN ('test', 'live')", name="ck_payment_config_mode"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)
+    key_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    key_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    webhook_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    webhook_public_id: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+
+
 class Payment(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "payments"
     __table_args__ = (Index("ix_payments_order_status", "order_id", "status"),)

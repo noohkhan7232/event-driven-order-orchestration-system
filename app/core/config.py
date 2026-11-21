@@ -1,12 +1,14 @@
 from functools import lru_cache
 from typing import Self
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", hide_input_in_errors=True
+    )
 
     app_name: str = "Event-Driven Order Orchestration System"
     environment: str = "local"
@@ -57,6 +59,20 @@ class Settings(BaseSettings):
     sse_ip_connection_limit: int = Field(default=5, ge=1)
     registration_enabled: bool = True
     registration_invite_code: SecretStr | None = Field(default=None, min_length=1)
+    credentials_encryption_key: SecretStr | None = None
+    public_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
+
+    @field_validator("credentials_encryption_key")
+    @classmethod
+    def validate_encryption_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            from app.core.crypto import credential_ring
+
+            try:
+                credential_ring(value)
+            except (ValueError, UnicodeError):
+                raise ValueError("CREDENTIALS_ENCRYPTION_KEY must contain valid Fernet keys") from None
+        return value
 
     @field_validator("rate_limit_redis_url", mode="before")
     @classmethod
@@ -75,6 +91,8 @@ class Settings(BaseSettings):
             raise ValueError("Unknown provider")
         if self.environment not in {"local", "development", "test"} and not self.allow_mock_providers:
             raise ValueError("Non-local mock providers require ALLOW_MOCK_PROVIDERS=true")
+        if self.environment not in {"local", "development", "test"} and self.credentials_encryption_key is None:
+            raise ValueError("CREDENTIALS_ENCRYPTION_KEY is required outside local/development/test")
         return self
 
 
