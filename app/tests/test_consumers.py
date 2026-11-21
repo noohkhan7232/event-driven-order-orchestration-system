@@ -22,7 +22,12 @@ def test_duplicate_redelivery_has_one_effect_per_step(db, workflow):
     assert order.status == OrderStatus.FULFILLMENT_REQUESTED
     assert stock.available_quantity == 9 and stock.reserved_quantity == 1
     assert db.query(Payment).count() == db.query(Shipment).count() == 1
-    assert db.query(ProcessedEvent).count() == db.query(OutboxEvent).count() == 3
+    assert (
+        db.query(ProcessedEvent).count()
+        == db.query(OutboxEvent).filter(OutboxEvent.event_type != EventNames.ORDER_STATUS_CHANGED).count()
+        == 3
+    )
+    assert db.query(OutboxEvent).filter_by(event_type=EventNames.ORDER_STATUS_CHANGED).count() == 4
     assert {row.correlation_id for row in db.query(OutboxEvent)} == {"flow-trace"}
 
 

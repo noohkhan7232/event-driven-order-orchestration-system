@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import InvalidTransitionError
+from app.domain.timeline import record_status_change
 from app.models.entities import AuditLog, Order
 from app.models.enums import OrderStatus as S
 
@@ -19,7 +20,13 @@ TRANSITIONS: dict[S, set[S]] = {
 
 
 def transition(
-    order: Order, new_status: S, *, db: Session, reason: str | None = None, actor: UUID | None = None
+    order: Order,
+    new_status: S,
+    *,
+    db: Session,
+    reason: str | None = None,
+    actor: UUID | None = None,
+    correlation_id: str | None = None,
 ) -> None:
     previous = order.status
     if new_status not in TRANSITIONS.get(previous, set()):
@@ -36,6 +43,7 @@ def transition(
             payload={"from": previous.value, "to": new_status.value, "reason": reason},
         )
     )
+    record_status_change(db, order, previous, reason=reason, correlation_id=correlation_id)
 
 
 def reopen_failed_order(order: Order, *, db: Session, actor: UUID, reason: str) -> None:
@@ -48,3 +56,4 @@ def reopen_failed_order(order: Order, *, db: Session, actor: UUID, reason: str) 
             actor_id=actor, entity_type="order", entity_id=order.id, action="order_reopened", payload={"reason": reason}
         )
     )
+    record_status_change(db, order, S.FAILED, reason=reason)

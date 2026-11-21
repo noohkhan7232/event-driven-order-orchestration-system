@@ -102,6 +102,8 @@ def process_event(self, raw_event: dict) -> None:
                 EventNames.INVENTORY_RESERVED: OrderStatus.INVENTORY_RESERVED,
                 EventNames.PAYMENT_AUTHORIZED: OrderStatus.PAID,
             }
+            # order.status_changed is informational. Its consumer may record the
+            # marker, never transition again (which would create an event loop).
             if event.event_type in expected:
                 if order.status == OrderStatus.CANCELLED:
                     logger.info("event_skipped_order_cancelled", event_id=str(event.event_id))
@@ -140,38 +142,41 @@ def _emit(db: Session, order: Order, kind: str, queue: str, event: DomainEvent |
 
 
 def _reserve_inventory(db: Session, order: Order, event: DomainEvent | None = None) -> None:
+    trace = event.correlation_id if event else None
     try:
         InventoryService(db).reserve_for_order(order)
     except InsufficientInventoryError:
-        transition(order, OrderStatus.FAILED, db=db, reason="INSUFFICIENT_INVENTORY")
+        transition(order, OrderStatus.FAILED, db=db, reason="INSUFFICIENT_INVENTORY", correlation_id=trace)
         _emit(db, order, EventNames.INVENTORY_FAILED, "inventory", event)
         return
-    transition(order, OrderStatus.INVENTORY_RESERVED, db=db)
+    transition(order, OrderStatus.INVENTORY_RESERVED, db=db, correlation_id=trace)
     _emit(db, order, EventNames.INVENTORY_RESERVED, "payments", event)
 
 
 def _authorize_payment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
-    transition(order, OrderStatus.PAYMENT_PENDING, db=db)
+    trace = event.correlation_id if event else None
+    transition(order, OrderStatus.PAYMENT_PENDING, db=db, correlation_id=trace)
     payment = PaymentService(db).authorize(order, retry_attempt=process_event.request.retries)
     if payment.status == PaymentStatus.AUTHORIZED:
-        transition(order, OrderStatus.PAID, db=db)
+        transition(order, OrderStatus.PAID, db=db, correlation_id=trace)
         _emit(db, order, EventNames.PAYMENT_AUTHORIZED, "shipments", event)
     else:
         InventoryService(db).release_for_order(order)
-        transition(order, OrderStatus.FAILED, db=db, reason="PAYMENT_DECLINED")
+        transition(order, OrderStatus.FAILED, db=db, reason="PAYMENT_DECLINED", correlation_id=trace)
         _emit(db, order, EventNames.PAYMENT_FAILED, "payments", event)
 
 
 def _create_shipment(db: Session, order: Order, event: DomainEvent | None = None) -> None:
+    trace = event.correlation_id if event else None
     try:
         ShippingService(db).create_shipment(order)
     except ProviderDeclined:
         PaymentService(db).refund(order)
         InventoryService(db).release_for_order(order)
-        transition(order, OrderStatus.FAILED, db=db, reason="SHIPMENT_FAILED")
+        transition(order, OrderStatus.FAILED, db=db, reason="SHIPMENT_FAILED", correlation_id=trace)
         _emit(db, order, "shipment.failed", "shipments", event)
         return
-    transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db)
+    transition(order, OrderStatus.FULFILLMENT_REQUESTED, db=db, correlation_id=trace)
     _emit(db, order, EventNames.SHIPMENT_CREATED, "shipments", event)
 
 

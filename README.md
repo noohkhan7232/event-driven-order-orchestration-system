@@ -387,3 +387,23 @@ Set this only behind a trusted proxy that sanitizes XFF and prevents direct acce
 it is never stored or returned by onboarding. Email verification/captcha remain deferred.
 Tracking/SSE configuration and payment-webhook policies are reserved for their
 future routes; those endpoints are not introduced by the rate-limiting task.
+
+### Order status history
+
+`order_timeline` records one initial row at intake and one row per accepted
+transition/reopen. Each transition also writes an `order.status_changed` outbox
+intent in the same transaction. The workflow consumer acknowledges those status
+notifications without another transition. Replay and rolled-back operations add
+no duplicate/committed history. Free-text reasons stay in private timeline/audit
+records; events carry only declared reason codes or null.
+
+Migration `0009_timeline` adds one synthetic observation for each existing order,
+tagged `MIGRATION_BACKFILL` at migration time. It does not invent old transitions
+or publish backfill events. Downgrade refuses operational timeline history until
+it has been explicitly archived; never force-drop the journal to bypass that guard.
+
+After starting the local stack with mock providers, run
+`python scripts/verify_rate_timeline.py` for a real API/broker/worker/Redis smoke.
+It checks quota headers, ordered history, four consumed status intents and
+idempotent replay, and leaves uniquely named local verification rows.
+Async payments, credentials and the Part 2 public surface are separate tasks.

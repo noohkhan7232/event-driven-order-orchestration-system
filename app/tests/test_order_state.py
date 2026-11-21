@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.entities import Order
+from app.models.entities import AuditLog, Order, OrderTimeline, OutboxEvent
 from app.models.enums import OrderStatus
 
 ALLOWED = {
@@ -24,13 +24,17 @@ def test_all_order_transitions(before, after):
     from app.core.exceptions import InvalidTransitionError
     from app.domain.order_state import transition
 
-    order = Order(id=uuid4(), status=before, idempotency_key="state")
+    order = Order(id=uuid4(), tenant_id=uuid4(), status=before, idempotency_key="state")
     db = Mock()
     if after.value in ALLOWED.get(before.value, set()):
         transition(order, after, db=db, reason="TEST", actor=uuid4())
         assert order.status == after
-        assert db.add.call_count == 1
-        assert db.add.call_args.args[0].payload == {"from": before.value, "to": after.value, "reason": "TEST"}
+        assert db.add.call_count == 3
+        audit, timeline, event = [call.args[0] for call in db.add.call_args_list]
+        assert isinstance(audit, AuditLog) and isinstance(timeline, OrderTimeline) and isinstance(event, OutboxEvent)
+        assert audit.payload == {"from": before.value, "to": after.value, "reason": "TEST"}
+        assert (timeline.from_status, timeline.to_status) == (before.value, after.value)
+        assert event.event_type == "order.status_changed" and event.payload["payload"]["to"] == after.value
     else:
         with pytest.raises(InvalidTransitionError):
             transition(order, after, db=db)

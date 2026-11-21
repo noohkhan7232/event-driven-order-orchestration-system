@@ -299,5 +299,14 @@ def test_postgres_two_tenants_same_sku_have_independent_stock(db, monkeypatch):
         assert stock.available_quantity == 0 and stock.reserved_quantity == 2
         assert db.query(Order).filter_by(tenant_id=tenant.id, status=OrderStatus.INVENTORY_RESERVED).count() == 2
         assert db.query(Order).filter_by(tenant_id=tenant.id, status=OrderStatus.FAILED).count() == 2
-        rows = db.query(OutboxEvent).filter_by(tenant_id=tenant.id).all()
+        rows = (
+            db.query(OutboxEvent)
+            .filter_by(tenant_id=tenant.id)
+            .filter(OutboxEvent.event_type != EventNames.ORDER_STATUS_CHANGED)
+            .all()
+        )
         assert len(rows) == 4 and all(row.payload["tenant_id"] == str(tenant.id) for row in rows)
+        assert (
+            db.query(OutboxEvent).filter_by(tenant_id=tenant.id, event_type=EventNames.ORDER_STATUS_CHANGED).count()
+            == 4
+        )
