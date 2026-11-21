@@ -286,6 +286,18 @@ class AuditLog(UUIDMixin, TimestampMixin, Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
+class InboundWebhookEvent(UUIDMixin, Base):
+    __tablename__ = "inbound_webhook_events"
+    __table_args__ = (UniqueConstraint("provider", "provider_event_id", name="uq_inbound_provider_event"),)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="received", nullable=False)
+
+
 class FailedJob(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "failed_jobs"
     __table_args__ = (Index("ix_failed_jobs_task_status", "task_name", "status"),)

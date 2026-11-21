@@ -157,6 +157,7 @@ def test_route_registry_has_no_unclassified_routes():
     from app.main import app
 
     public = {
+        ("POST", "/api/v1/webhooks/payments/{provider}/{webhook_public_id}"),
         ("GET", "/docs"),
         ("HEAD", "/docs"),
         ("GET", "/docs/oauth2-redirect"),
