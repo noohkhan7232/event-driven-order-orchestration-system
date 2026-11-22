@@ -21,7 +21,7 @@ from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
 from app.services.payment_sessions import handle_payment
 from app.services.payments import PaymentService
-from app.services.provider_events import process_provider_event
+from app.services.provider_events import UnmatchedPayment, process_provider_event
 from app.services.refunds import RefundBusy, record_refund_failure, run_refund
 from app.services.shipping import ShippingService
 from app.workers.celery_app import celery_app
@@ -98,7 +98,13 @@ def process_refund(self, refund_id: str) -> None:
         raise self.retry(countdown=busy.seconds) from None
 
 
-@celery_app.task(bind=True, base=ResilientTask, name="app.workers.tasks.process_event")
+class EventTask(ResilientTask):
+    # Explicit unmatched-notice retries are bounded by receipt age. Ordinary
+    # technical failures retain the finite autoretry budget in retry_kwargs.
+    max_retries = None
+
+
+@celery_app.task(bind=True, base=EventTask, name="app.workers.tasks.process_event")
 def process_event(self, raw_event: dict) -> None:
     try:
         event = DomainEvent.model_validate(raw_event)
@@ -169,6 +175,9 @@ def process_event(self, raw_event: dict) -> None:
                     }[event.event_type]
                     step(db, order, event)
             db.commit()
+        except UnmatchedPayment as exc:
+            db.rollback()
+            raise self.retry(exc=exc, countdown=exc.retry_after, max_retries=None) from None
         except (BusinessError, TransientError, OperationalError):
             db.rollback()
             raise
