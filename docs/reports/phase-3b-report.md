@@ -286,14 +286,16 @@ and deduplicate the verified envelope id before applying effects):
 
 ```python
 import hashlib, hmac, json, time
+
+
 def verify(raw, headers, secret):
-    parts = dict(x.split('=', 1) for x in headers['X-OOS-Signature'].split(','))
-    stamp = parts['t']
-    if stamp != headers['X-OOS-Timestamp'] or abs(time.time() - int(stamp)) > 300:
-        raise ValueError('Invalid webhook')
-    expected = hmac.new(secret.encode(), stamp.encode() + b'.' + raw, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, parts.get('v1', '')):
-        raise ValueError('Invalid webhook')
+    parts = dict(x.split("=", 1) for x in headers["X-OOS-Signature"].split(","))
+    stamp = parts["t"]
+    if stamp != headers["X-OOS-Timestamp"] or abs(time.time() - int(stamp)) > 300:
+        raise ValueError("Invalid webhook")
+    expected = hmac.new(secret.encode(), stamp.encode() + b"." + raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, parts.get("v1", "")):
+        raise ValueError("Invalid webhook")
     return json.loads(raw)
 ```
 ```javascript
