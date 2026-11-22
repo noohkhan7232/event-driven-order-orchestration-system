@@ -36,10 +36,18 @@ def roundtrip(url, monkeypatch):
     config = Config("alembic.ini")
     try:
         command.upgrade(config, "0014_refund_claims")
+        tenants = sa.Table("tenants", sa.MetaData(), sa.Column("id", sa.Uuid(), primary_key=True), autoload_with=engine)
+        other_tenant = uuid4()
         with Session(engine) as db:
-            tenant = Tenant(name="Second seller", slug="receipt-migration")
-            db.add(tenant)
-            db.flush()
+            db.execute(
+                tenants.insert().values(
+                    id=other_tenant,
+                    name="Second seller",
+                    slug="receipt-migration",
+                    status="active",
+                    default_currency="INR",
+                )
+            )
             row = InboundWebhookEvent(
                 tenant_id=DEFAULT_TENANT_ID,
                 provider="razorpay",
@@ -50,7 +58,7 @@ def roundtrip(url, monkeypatch):
             )
             db.add(row)
             db.commit()
-            identity, other_tenant, received = row.id, tenant.id, row.received_at
+            identity, received = row.id, row.received_at
         command.upgrade(config, "head")
         constraint = next(
             c

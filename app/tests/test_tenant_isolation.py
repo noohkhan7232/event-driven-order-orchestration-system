@@ -173,6 +173,9 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("PATCH", "/api/v1/shipments/{shipment_id}"),
+        ("GET", "/api/v1/settings/shipping"),
+        ("PATCH", "/api/v1/settings/shipping"),
         ("PUT", "/api/v1/settings/payments/razorpay"),
         ("GET", "/api/v1/settings/payments/razorpay"),
         ("DELETE", "/api/v1/settings/payments/razorpay"),

@@ -104,12 +104,14 @@ class Settings(BaseSettings):
             self.secret_key in {"change-me", "change-me-in-production"} or len(self.secret_key) < 32
         ):
             raise ValueError("Production secret_key must be at least 32 characters and not a known default")
-        if self.payment_provider != "mock" or self.shipping_provider != "mock":
+        if self.payment_provider != "mock" or self.shipping_provider not in {"mock", "manual"}:
             raise ValueError("Unknown provider")
         if self.environment not in {"local", "development", "test"} and not self.allow_mock_providers:
             raise ValueError("Non-local mock providers require ALLOW_MOCK_PROVIDERS=true")
         if self.environment not in {"local", "development", "test"} and self.credentials_encryption_key is None:
             raise ValueError("CREDENTIALS_ENCRYPTION_KEY is required outside local/development/test")
+        if not local and self.shipping_provider == "mock":
+            raise ValueError("mock shipping is forbidden outside local/development/test")
         return self
 
 

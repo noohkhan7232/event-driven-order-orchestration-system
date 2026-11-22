@@ -90,7 +90,14 @@ def legacy_roundtrip(url, monkeypatch):
             tenants.c.id.type = sa.Uuid()
             conn.execute(
                 tenants.insert(),
-                dict(id=uuid4(), name="Another", slug="another", status="active", default_currency="USD"),
+                dict(
+                    id=uuid4(),
+                    name="Another",
+                    slug="another",
+                    status="active",
+                    default_currency="USD",
+                    shipping_provider="mock",
+                ),
             )
         with pytest.raises(RuntimeError, match="tenant"):
             command.downgrade(config, "0006_replay")

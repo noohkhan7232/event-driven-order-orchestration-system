@@ -1,12 +1,13 @@
 import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -27,6 +28,12 @@ from app.db.base import Base, TimestampMixin, UUIDMixin
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus, ShipmentStatus, UserRole
 
 DEFAULT_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+def default_shipping_provider() -> str:
+    from app.core.config import get_settings
+
+    return get_settings().shipping_provider
 
 
 class OrderTimeline(Base):
@@ -53,6 +60,9 @@ class Tenant(UUIDMixin, TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
     default_currency: Mapped[str] = mapped_column(String(3), default="INR", server_default="INR", nullable=False)
+    shipping_provider: Mapped[str] = mapped_column(
+        String(16), default=default_shipping_provider, server_default="manual", nullable=False
+    )
 
     @validates("slug")
     def validate_slug(self, key: str, value: str) -> str:
@@ -271,6 +281,8 @@ class Shipment(UUIDMixin, TimestampMixin, Base):
     tracking_number: Mapped[str | None] = mapped_column(String(120), unique=True)
     status: Mapped[ShipmentStatus] = mapped_column(Enum(ShipmentStatus), default=ShipmentStatus.PENDING, nullable=False)
     estimated_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tracking_url: Mapped[str | None] = mapped_column(String(300))
+    estimated_delivery: Mapped[date | None] = mapped_column(Date)
 
     order: Mapped[Order] = relationship(back_populates="shipments")
     events: Mapped[list["ShipmentEvent"]] = relationship(back_populates="shipment", cascade="all, delete-orphan")

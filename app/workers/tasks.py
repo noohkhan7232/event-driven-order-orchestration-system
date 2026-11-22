@@ -25,7 +25,7 @@ from app.services.payment_sessions import handle_payment
 from app.services.payments import PaymentService
 from app.services.provider_events import UnmatchedPayment, process_provider_event
 from app.services.refunds import RefundBusy, record_refund_failure, run_refund
-from app.services.shipping import ShippingService
+from app.services.shipping import ShippingService, apply_shipment_status
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -147,6 +147,8 @@ def process_event(self, raw_event: dict) -> None:
                 EventNames.INVENTORY_RESERVED: OrderStatus.INVENTORY_RESERVED,
                 EventNames.PAYMENT_AUTHORIZED: OrderStatus.PAID,
             }
+            if event.event_type == "shipment.status_changed":
+                apply_shipment_status(db, order, event)
             if (
                 event.event_type == EventNames.ORDER_STATUS_CHANGED
                 and order.payment_method == "cod"

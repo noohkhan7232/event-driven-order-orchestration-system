@@ -18,6 +18,7 @@ api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 api_router.include_router(orders.router, prefix="/orders", tags=["Orders"])
 api_router.include_router(inventory.router, prefix="/inventory", tags=["Inventory"])
 api_router.include_router(shipments.router, prefix="/shipments", tags=["Shipments"])
+api_router.include_router(shipments.settings_router, prefix="/settings/shipping", tags=["Shipping settings"])
 api_router.include_router(health.router, prefix="/system", tags=["System"])
 
 api_router.include_router(tenancy.router, tags=["Tenancy"])
