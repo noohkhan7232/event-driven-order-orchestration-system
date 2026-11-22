@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     payment_capture_grace_seconds: int = Field(default=120, ge=0)
     payment_expiry_interval_seconds: float = Field(default=30, gt=0)
     payment_maintenance_batch_size: int = Field(default=100, ge=1, le=1000)
+    payment_reconcile_after_seconds: int = Field(default=60, ge=0)
+    payment_reconcile_interval_seconds: float = Field(default=60, gt=0)
+    payment_reconcile_lease_seconds: int = Field(default=60, ge=1)
     refund_lease_seconds: int = Field(default=60, ge=1)
     public_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
 

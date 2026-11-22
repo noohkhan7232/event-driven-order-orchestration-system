@@ -334,6 +334,18 @@ class InboundWebhookEvent(UUIDMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="received", nullable=False)
 
 
+class PaymentReconciliation(TimestampMixin, Base):
+    __tablename__ = "payment_reconciliation"
+
+    payment_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("payments.id"), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    order_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orders.id"), nullable=False)
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(80))
+
+
 class FailedJob(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "failed_jobs"
     __table_args__ = (Index("ix_failed_jobs_task_status", "task_name", "status"),)

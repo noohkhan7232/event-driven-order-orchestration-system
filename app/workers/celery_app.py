@@ -26,6 +26,7 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     task_routes={
         "app.workers.tasks.expire_unpaid_orders": {"queue": "payments"},
+        "app.workers.tasks.reconcile_pending_payments": {"queue": "payments"},
         "app.workers.tasks.process_refund": {"queue": "payments"},
         "app.workers.tasks.process_event": {"queue": "orders"},
         "app.workers.tasks.check_low_stock": {"queue": "inventory"},
@@ -42,6 +43,10 @@ celery_app.conf.update(
         "expire-unpaid-orders": {
             "task": "app.workers.tasks.expire_unpaid_orders",
             "schedule": settings.payment_expiry_interval_seconds,
+        },
+        "reconcile-pending-payments": {
+            "task": "app.workers.tasks.reconcile_pending_payments",
+            "schedule": settings.payment_reconcile_interval_seconds,
         },
         "low-stock-scan-every-5-minutes": {
             "task": "app.workers.tasks.check_low_stock",

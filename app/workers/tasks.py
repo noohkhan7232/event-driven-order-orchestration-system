@@ -20,6 +20,7 @@ from app.repositories.outbox import OutboxRepository
 from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
 from app.services.payment_expiry import expire_orders
+from app.services.payment_reconciliation import reconcile_payments
 from app.services.payment_sessions import handle_payment
 from app.services.payments import PaymentService
 from app.services.provider_events import UnmatchedPayment, process_provider_event
@@ -287,3 +288,8 @@ def detect_delayed_shipments() -> int:
 @celery_app.task(name="app.workers.tasks.expire_unpaid_orders")
 def expire_unpaid_orders() -> int:
     return expire_orders(SessionLocal)
+
+
+@celery_app.task(name="app.workers.tasks.reconcile_pending_payments")
+def reconcile_pending_payments() -> dict[str, int]:
+    return reconcile_payments(SessionLocal)
