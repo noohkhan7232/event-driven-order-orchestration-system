@@ -1,7 +1,8 @@
-# Phase 3B — Part 1
+# Phase 3B — Part 1, shipping and seller webhooks
 
 22 November 2026, Asia/Calcutta. Branch: `phase-3b-integrations`.
-Part 1 is implemented and verified locally. Part 2 remains out of scope.
+Part 1 is reviewed. Scoped Part 2 tasks 3B.6 and 3B.7 are implemented locally.
+Tasks 3B.8–3B.13 remain pending and were not selected for this session.
 This document describes the current system and final evidence only.
 
 # PART A — Architecture and operations
@@ -20,6 +21,8 @@ stateDiagram-v2
     INVENTORY_RESERVED --> FULFILLMENT_REQUESTED: COD
     PAYMENT_PENDING --> PAID: matching capture before deadline
     PAID --> FULFILLMENT_REQUESTED: shipment
+    FULFILLMENT_REQUESTED --> SHIPPED: in transit
+    SHIPPED --> DELIVERED: delivery
     PAYMENT_PENDING --> FAILED: decline or expiry
     PAYMENT_PENDING --> CANCELLED: cancel and release
     PAID --> CANCELLED: release and refund
@@ -158,15 +161,155 @@ Pending refunds stay processing; confirmed missing unknown refunds requeue the
 same obligation/key within budget. Poll errors postpone safely without financial
 compensation; polling never increments submission attempts. Live guarantees: B13.
 
-## A4. Shipping and COD
+## A4. Shipping lifecycle and COD
 
-Part 2 — full shipping lifecycle/provider callbacks are not yet implemented.
-Part 1 includes mock shipment creation/cancellation, COD fulfillment and once-only
-collection on a delivered state-machine notification. COD cancellation does not refund.
+The existing native ShipmentStatus labels are retained; no native enum is extended.
 
-## A5. Outbound webhooks
+| Shipment observation | Order effect |
+|---|---|
+|PENDING / CREATED|Recorded; no transition|
+|IN_TRANSIT|FULFILLMENT_REQUESTED → SHIPPED|
+|DELAYED|Recorded; no transition, including delay before pickup|
+|DELIVERED|SHIPPED → DELIVERED; from fulfillment, records SHIPPED then DELIVERED atomically|
+|CANCELLED|Recorded; order cancellation remains the order service's responsibility|
 
-Part 2 — not yet implemented.
+record_event persists every observation, audit and shipment.status_changed intent
+in one transaction. Its payload contains only shipment/event UUIDs. The consumer
+locks the order, verifies tenant and immutable observation ownership, and applies
+guarded forward transitions. Duplicate delivery IDs are marked once; different
+observations cannot move terminal shipments/orders backwards. Cancelled/failed
+orders ignore notices. A permitted order cancellation wins over an unconsumed
+delivery observation and atomically cancels its shipment, releases stock and
+journals any refund. DELIVERED emits order.status_changed; the existing COD
+consumer marks the pending collection CAPTURED/collected with one audit.
+
+ManualShippingProvider performs no external I/O. It creates CREATED/awaiting-pickup
+shipments with an internal deterministic reference, no courier tracking number and
+no invented estimate. The seller uses PATCH /shipments/{id} to set carrier≤60,
+tracking_number≤80, HTTPS-only tracking_url≤300 and optional estimated_delivery
+(ISO date), then POST /shipments/{id}/events. Staff JWTs/orders:write keys may edit;
+customers cannot; foreign IDs return404. Owner-only GET/PATCH /settings/shipping
+selects the tenant provider. New tenants snapshot SHIPPING_PROVIDER; raw inserts
+default manual. Migration preserves existing tenants' mock selection; configure
+them to manual before production use. Both settings and runtime resolution reject
+mock shipping outside local/development/test, regardless of payment mock opt-in.
+
+Existing carrier80/tracking120 storage and estimated_delivery_at are retained to
+avoid truncating legacy data; validation bounds apply to new writes. Tracking URL
+and date columns are additive. Order shipment responses expose the new fields.
+Returns/RTO, courier aggregators and shipping-provider callbacks remain deferred.
+
+## A5. Seller-facing outbound webhooks
+
+Owner JWTs manage /api/v1/webhook-endpoints. POST accepts url, events[] and optional
+description; GET lists masked metadata; PATCH changes configuration and re-enables;
+DELETE deactivates/tombstones while retaining delivery history. POST /{id}/rotate-secret
+returns a new signing_secret once. POST /{id}/test queues ping. GET /{id}/deliveries
+supports status/event_type/limit/offset; POST /{id}/deliveries/{delivery_id}/replay
+requeues the same event and frozen payload, increments replay_count and resets its
+attempt budget. Active claims cannot be replayed. Keys/non-owner JWTs cannot manage
+these routes; foreign IDs return404 and suspended credentials return403.
+
+Signing secrets have a whsec_ prefix and 256-bit random suffix. Only creation and
+rotation return plaintext; Fernet ciphertext is stored, lists use a static mask,
+and neither secrets nor ciphertext enter logs/events/delivery responses. Encryption
+key configuration is required for credential writes and delivery. DELETE preserves
+encrypted journals for audit, so archival is an explicit operator action.
+
+| Public type | Source |
+|---|---|
+|order.created|Owned order.created|
+|order.status_changed|Every owned order.status_changed|
+|order.paid / shipped / delivered / failed / cancelled|Corresponding status-change alias|
+|payment.refunded|refund.succeeded|
+|ping|Owner test action|
+
+Fan-out runs in the workflow transaction, selects active endpoints of the order's
+tenant and inserts UNIQUE(endpoint_id,event_id) rows. Alias IDs are deterministic
+UUIDv5(base_event_id,type), so subscribing to generic and semantic events produces
+two distinct logical events without collisions. The generic/source event keeps
+its base ID. Duplicate fan-out preserves the original payload. Each status snapshot
+uses the source event's from/to, even if the order has since advanced.
+
+Envelope: {id,type,created_at,tenant_id,data}. Data includes order_id,
+external_reference, status/from/to, currency/total, item sku/name/quantity,
+carrier/tracking_number and timestamps. Buyer profile, email, phone, private reasons,
+notes and credentials are excluded by an allowlist. Merchant reference/catalog/
+tracking fields must themselves be supplied without personal data; there is no DLP.
+
+```json
+{"id":"00000000-0000-4000-8000-000000000001","type":"order.shipped","created_at":"2026-11-22T08:00:00+00:00","tenant_id":"00000000-0000-0000-0000-000000000001","data":{"order_id":"00000000-0000-4000-8000-000000000002","external_reference":"shop-1001","status":"shipped","from":"fulfillment_requested","to":"shipped","currency":"INR","total":"59.97","items":[{"sku":"TEA","name":"Tea","quantity":3}],"shipments":[{"carrier":"Seller courier","tracking_number":"TRACK123"}],"created_at":"2026-11-22T07:00:00+00:00","updated_at":"2026-11-22T08:00:00+00:00"}}
+```
+
+The orders-queue poller locks ENDPOINT then DELIVERY with SKIP LOCKED, commits a
+durable attempt/token/lease and closes its session. DNS, decryption, signing and
+all HTTP run on detached values. Completion locks the same rows and checks the
+token before updating. Expired leases recover crashes; exhausted crash budgets
+become dead without another send. Delivery is at least once: a crash after remote
+acceptance can repeat an event. Receivers must durably deduplicate envelope id;
+acknowledge only after durable acceptance. Ordering across deliveries is not promised.
+
+POST sends Content-Type: application/json, User-Agent: oos-webhooks/1 and
+X-OOS-Event-Id / X-OOS-Event-Type / X-OOS-Delivery-Id / X-OOS-Timestamp.
+X-OOS-Signature is t=<unix>,v1=<hex HMAC-SHA256(secret, t + '.' + raw_body)>.
+JSON is deterministic UTF-8; timestamp/signature refresh each attempt. HTTP2 is
+not enabled. 2xx delivers; other statuses/transport failures retry. Redirects are
+never followed; response wire bytes are capped and never stored. Errors are fixed
+safe codes, not exception/response text. Default HTTP connect/read/write/pool timeout
+is5s; OS DNS resolution follows host resolver configuration.
+
+Retries use min(43200,600×2^(attempt-1)) seconds plus0–10% jitter. Eight attempts
+span roughly22.5–24.75h. Each failed attempt increments consecutive_failures;
+success resets it. At20 failures the endpoint auto-disables with a safe reason.
+Owner re-enabling clears failures/disable metadata; dead deliveries need replay.
+Replay preserves event/delivery IDs and payload. URL/secret changes affect future
+claims; already in-flight calls may use the previous configuration/key. Retain
+receiver verification-key overlap during rotation.
+
+SSRF validation occurs at create/update and every attempt: strict HTTPS, no
+userinfo/fragments/control characters,443 plus explicit extra ports. It rejects
+localhost, private/link-local/CGNAT/multicast/unspecified/reserved addresses,
+IPv6 ULA/loopback/mapped forms and ambiguous decimal/hex/octal/short IPv4 encodings.
+Every DNS answer must be public. Delivery connects to a validated numeric IP with
+original Host and TLS SNI/certificate hostname; it does not resolve the hostname
+again or use ambient proxies. This closes the validation-to-connect DNS-rebinding
+race. The installed HTTPX transport forwards the documented
+[httpcore sni_hostname extension](https://github.com/encode/httpcore/blob/master/docs/extensions.md).
+Tests inspect the pinned request and PostgreSQL locks inside MockTransport; live
+external TLS/egress is not exercised. Production still needs appropriate egress
+controls for its routing/NAT environment. Private/plain-HTTP targets require an
+explicit local/dev/test-only override plus port allowlist; validators forbid it
+in production, staging and custom non-local environments.
+
+Independent receiver verification examples (raw bytes; reject stale timestamps
+and deduplicate the verified envelope id before applying effects):
+
+```python
+import hashlib, hmac, json, time
+def verify(raw, headers, secret):
+    parts = dict(x.split('=', 1) for x in headers['X-OOS-Signature'].split(','))
+    stamp = parts['t']
+    if stamp != headers['X-OOS-Timestamp'] or abs(time.time() - int(stamp)) > 300:
+        raise ValueError('Invalid webhook')
+    expected = hmac.new(secret.encode(), stamp.encode() + b'.' + raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, parts.get('v1', '')):
+        raise ValueError('Invalid webhook')
+    return json.loads(raw)
+```
+```javascript
+import {createHmac, timingSafeEqual} from 'node:crypto';
+function verify(raw, headers, secret) {
+  const p = Object.fromEntries(headers['x-oos-signature'].split(',').map(x => x.split('=')));
+  if (p.t !== headers['x-oos-timestamp'] || !/^\d+$/.test(p.t) ||
+      !Number.isSafeInteger(Number(p.t)) || Math.abs(Date.now()/1000 - Number(p.t)) > 300)
+    throw Error('Invalid webhook');
+  const expected = createHmac('sha256', secret).update(p.t + '.').update(raw).digest();
+  const actual = /^[0-9a-f]{64}$/.test(p.v1 ?? '') ? Buffer.from(p.v1, 'hex') : Buffer.alloc(0);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
+    throw Error('Invalid webhook');
+  return JSON.parse(raw.toString('utf8'));
+}
+```
 
 ## A6. Notifications
 
@@ -284,6 +427,51 @@ storage; legacy12-character prefixes and suffix hashes keep working.
 Intents carry tenant/correlation metadata and share business commits. Processed
 markers and terminal receipt/refund guards make redelivery safe.
 
+Scoped Part 2 adds tenant.shipping_provider and shipment tracking_url/date while
+preserving existing native enums, carrier/tracking widths and legacy estimate.
+
+```mermaid
+erDiagram
+    TENANTS ||--o{ WEBHOOK_ENDPOINTS : owns
+    TENANTS ||--o{ WEBHOOK_DELIVERIES : owns
+    WEBHOOK_ENDPOINTS ||--o{ WEBHOOK_DELIVERIES : receives
+    ORDERS ||--o{ SHIPMENTS : fulfills
+    SHIPMENTS ||--o{ SHIPMENT_EVENTS : records
+    WEBHOOK_ENDPOINTS {
+        UUID tenant_id FK
+        string url
+        string secret_enc "Fernet only"
+        JSON events
+        boolean is_active
+        int consecutive_failures
+        timestamp disabled_at
+        string disabled_reason
+        timestamp deleted_at "soft deletion"
+    }
+    WEBHOOK_DELIVERIES {
+        UUID tenant_id FK
+        UUID endpoint_id FK
+        UUID event_id "unique with endpoint_id"
+        string event_type
+        JSON payload "buyer-PII allowlist"
+        string status "pending/delivered/failed/dead"
+        int attempts
+        timestamp next_attempt_at
+        int last_status_code
+        string last_error "safe code"
+        timestamp delivered_at
+        int replay_count
+        UUID claim_token
+        timestamp lease_until
+    }
+```
+
+shipment.status_changed: ShippingService → orders workflow on shipments queue;
+order aggregate + observation UUIDs only. Status/refund/creation consumers fan out
+to durable deliveries in the same business transaction; deliver_webhooks polls
+on orders queue. Endpoint/delivery tables use portable strings and due/owner
+indexes, with timestamps and description on endpoint metadata.
+
 ## A11. Configuration reference
 
 | Variable | Default / contract |
@@ -321,6 +509,24 @@ markers and terminal receipt/refund guards make redelivery safe.
 cryptography is a runtime dependency. Redis and PostgreSQL test resources are
 separate from the local operational databases; pytest refuses non-_test PG names.
 
+| Scoped Part 2 variable | Default / requirement |
+|---|---|
+|SHIPPING_PROVIDER|mock locally; manual required non-locally; tenant snapshots on creation|
+|WEBHOOK_ALLOW_INSECURE_TARGETS|false; forbidden outside local/development/test|
+|WEBHOOK_EXTRA_ALLOWED_PORTS|[]; JSON list of1–65535 ports, additional to443|
+|WEBHOOK_MAX_ATTEMPTS|8;1–100, durable attempt budget|
+|WEBHOOK_TIMEOUT_SECONDS|5; positive≤60 HTTP timeout|
+|WEBHOOK_RESPONSE_MAX_BYTES|1024;1–65536 wire-byte cap|
+|WEBHOOK_RETRY_BASE_SECONDS|600; positive|
+|WEBHOOK_RETRY_MAX_SECONDS|43200; positive|
+|WEBHOOK_DISABLE_AFTER_FAILURES|20; positive|
+|WEBHOOK_DELIVERY_INTERVAL_SECONDS|10; positive beat interval|
+|WEBHOOK_DELIVERY_BATCH_SIZE|100;1–1000|
+|WEBHOOK_LEASE_SECONDS|60; must exceed HTTP timeout|
+
+Outbound secrets use the existing CREDENTIALS_ENCRYPTION_KEY ring; no separate
+plaintext secret store or external-provider credentials are introduced.
+
 ## A12. API reference
 
 | Method/path | Access / result |
@@ -334,11 +540,30 @@ separate from the local operational databases; pytest refuses non-_test PG names
 | POST /api/v1/orders | Existing owner/principal rules; optional prepaid/cod, configuration gate, immutable pricing/hash |
 | Order get/list/cancel responses | Existing ownership; method/status/expiry and safe checkout while pending |
 
-The registry exactly matches all43 method/path entries:13 public,1 public webhook,
-23 tenant and6 platform. Every public/public-webhook entry declares quotas.
+The original Part 1 registry has43 entries; scoped additions bring the current
+registry to54 (breakdown below). Every public/public-webhook entry declares quotas.
 No polling/refund journal, failed-jobs, tracking or test-only public mock endpoint
 is added. Twenty existing owned routes retain the four-principal matrix; credential
 roles/ownership and public signature/tenant tests supplement it.
+
+New authenticated routes use the existing authenticated quota (600/60s by
+principal by default), authoritative active-tenant check and exact route registry.
+
+| Method/path under /api/v1 | Access / result |
+|---|---|
+|PATCH /shipments/{shipment_id}|Staff JWT/orders:write key; owned order-first lock; metadata; foreign404, customer403, invalid422, tracking conflict409|
+|GET/PATCH /settings/shipping|Owner JWT; owned provider; invalid422/non-local mock400|
+|POST /webhook-endpoints|Owner JWT;201, once-only secret; unsafe target400, invalid422, unavailable encryption503|
+|GET /webhook-endpoints|Owner JWT; own paginated masked list|
+|PATCH /webhook-endpoints/{endpoint_id}|Owner JWT; owned URL/events/active/description; foreign404, invalid422/unsafe400|
+|DELETE /webhook-endpoints/{endpoint_id}|Owner JWT; owned soft delete204|
+|POST /webhook-endpoints/{endpoint_id}/rotate-secret|Owner JWT; owned new once-only secret|
+|POST /webhook-endpoints/{endpoint_id}/test|Owner JWT; owned ping202; inactive409|
+|GET /webhook-endpoints/{endpoint_id}/deliveries|Owner JWT; own status/event_type filters, limit1–100/offset≥0|
+|POST /webhook-endpoints/{endpoint_id}/deliveries/{delivery_id}/replay|Owner JWT; own same event ID; inactive/live lease409, foreign/mismatch404|
+
+Registry now54 entries:13 public,1 public webhook,34 tenant,6 platform. No public
+route is added in this scope. Static OpenAPI export belongs to deferred3B.12.
 
 ## A13. Operations runbook
 
@@ -371,9 +596,22 @@ uses unique proof rows and temporary Redis/overrides, reads restored defaults,
 and removes only its own cache/config. Its Razorpay HTTP case is a local session
 fixture with dummy credentials and no remote order/charge.
 
+Scoped Part 2 operations: select manual through owner PATCH /settings/shipping,
+attach courier metadata, then record transit/delivery observations. Existing
+migrated tenants preserve mock; switch them before production shipping.
+
+For webhook failures inspect the owned delivery's status/attempts/safe error and
+next_attempt_at. Fix URL/DNS/TLS/key configuration; re-enable an auto-disabled
+endpoint, then replay dead deliveries. Receiver idempotency must use the unchanged
+event ID. Rotate signing secrets through the owner action and retain receiver-key
+overlap for in-flight calls. Rotate encrypted ciphertext with the existing Fernet
+ring before retiring old keys. Never edit a delivery payload/key to force success.
+Notifications, tracking-secret rotation, Mailpit/sink profile and full Docker
+Part 2 acceptance remain outside the selected tasks.
+
 ## A14. Limitations
 
-Part 2 surfaces and production deployment/HA/soak are not implemented here.
+Notifications, tracking, SSE, failed-jobs HTTP and production deployment/HA/soak remain unimplemented.
 Application ownership controls do not add PostgreSQL RLS. Global email uniqueness
 and the existing HTTP low-stock pagination cap remain unchanged. Local memory
 limiting and simulator lookup maps are process-local; use shared Redis for real
@@ -387,13 +625,17 @@ reconciliation. See the single current NOT VERIFIED list in B13.
 
 ## B1. Summary
 
-The reviewed branch/report and git history were read before edits. Baseline:
-377 passed,25 skipped. Review fixes a/b/c and saga changes7/8/9 are separately
-committed with green Ruff/format/mypy and full SQLite gates; targeted real PG
-checks verify the relevant transactions/concurrency. Full current gates, real
-Redis/PostgreSQL, all requested Docker cases and legacy migration are below.
-No selected implementation task is skipped or blocked. Working tree is clean
-after the final report-only commit; no push/PR/merge is performed.
+Part 1 report/history and DONE statuses were read before editing.
+Baseline:425 passed,34 skipped,285.40s. Branch:phase-3b-integrations.
+Selected tasks3B.6/3B.7 are DONE in separate green commits; none are skipped.
+Shipping includes manual metadata, forward lifecycle and once-only COD collection.
+Outbound includes encrypted secrets, owned APIs, safe fan-out, leases and retry/replay.
+Pinned IP + original Host/SNI closes the DNS validation/connect race.
+Real PG threads prove SKIP LOCKED and lock-free HTTP, including concurrent owner writes.
+Full current quality/coverage evidence follows. Part 1 Docker evidence is retained
+as reviewed evidence; new-scope Docker/live external HTTP is not asserted.
+No push, PR, merge or production deployment is performed. Remaining3B.8–3B.13
+were not selected; this report does not claim full Part 2 completion.
 
 ## B2. Task status
 
@@ -411,8 +653,8 @@ after the final report-only commit; no push/PR/merge is performed.
 |3B.5(8)| Payment/refund reconciliation |DONE |122cb3b |Durable detached polling |
 |3B.5(9)| Real PG races/NOWAIT proofs |DONE |d33935c |Prior session/refund proofs retained |
 |3B.P1| Full local quality/acceptance/migration/report |DONE |db98ac4 |Additional report-only commit |
-|3B.6| Shipping lifecycle |Part 2 |— |Out of scope |
-|3B.7| Outbound webhooks |Part 2 |— |Out of scope |
+|3B.6| Manual shipping lifecycle and COD |DONE |722e6f4 |API/consumer/PG migration and cancellation race |
+|3B.7| Seller webhooks, SSRF and detached delivery |DONE |5570b95 |Pinned HTTP/PG NOWAIT, owner/privacy/retry proofs |
 |3B.8| Notifications |Part 2 |— |Out of scope |
 |3B.9| Public tracking |Part 2 |— |Out of scope |
 |3B.10| SSE |Part 2 |— |Out of scope |
@@ -438,48 +680,69 @@ New proof tests are labelled positive controls rather than fabricated red runs.
 Final outputs supersede diagnostic runs. No existing test is removed or weakened;
 all compatibility changes are enumerated in B11.
 
+Scoped Part 2 TDD evidence:
+
+| Item | Observed red | Green / controls |
+|---|---|---|
+|3B.6 shipping|1 failed,8 errors,4.33s: missing manual/settings feature|Initial11 passed; service/manual100%, API94%|
+|Cancellation vs queued delivery|1 failed,1 positive control,4.62s on PG|14 PG lifecycle/migration tests pass28.07s|
+|Historical schema compatibility|Full run2 failed: new ORM column at0014, new default intercepted old refusal|Reflected old tenant seed / explicit reconstructible default; original assertions retained; PG5 pass15.62s|
+|3B.6 final gates|See raw results in B4 for final combined tree|Shipping commit:438 passed,35 skipped,235.41s|
+|3B.7 SSRF/API|38 failed,3 errors,26.92s: absent modules|43 passed first implementation;48 edge controls passed34.12s|
+|Delivery worker|2 failed4.77s: absent worker|Independent HMAC, retry/dead/replay, suspension/DNS/lease controls|
+|IP pinning|1 failed2.69s: request still used hostname|Numeric destination, original Host/SNI, redirect/body-cap assertions now pass|
+|Explicit port zero|1 failed5.95s:0 fell back to443|Explicit0 is now rejected; omitted port alone gets scheme default|
+|PG HTTP proof / migrations|Positive controls, not fabricated reds|Actual MockTransport HTTP in flight; NOWAIT/peer SKIP LOCKED/rotation; empty roundtrip + operational refusal|
+
 ## B4. Final quality gates and production coverage
 
 ```text
 All checks passed!
-168 files already formatted
-Success: no issues found in 135 source files
-SQLite: 425 passed, 34 skipped in 288.28s (0:04:48)
-PostgreSQL + Redis: 458 passed, 1 skipped in 599.34s (0:09:59)
+183 files already formatted
+Success: no issues found in 148 source files
+SQLite: 496 passed, 37 skipped in 585.36s (0:09:45)
+PostgreSQL + Redis: 532 passed, 1 skipped in 742.10s (0:12:22)
 ```
 
-Coverage uses `--cov=app` with app/tests omitted in pyproject, so it measures
-application production statements, not tests/migrations/runners. SQLite skips
-PG/Redis-only cases plus the optional live test; PG+Redis skips only that live test.
-Overall and each selected new module exceed90%.
+Production statements only (--cov=app; app/tests omitted). SQLite skips PG/Redis
+and optional live provider cases; PG+Redis skips only the optional live provider.
+All new statement-bearing modules plus changed shipping service/API exceed90%.
 
 | Production module | SQLite | PG+Redis |
 |---|---:|---:|
-|core/ratelimit.py|99.29%|99.29%|
-|middleware/rate_limit.py|100.00%|100.00%|
+|api/v1/endpoints/payment_config.py|100.00%|100.00%|
+|api/v1/endpoints/payment_webhooks.py|100.00%|100.00%|
+|api/v1/endpoints/shipments.py|93.85%|93.85%|
+|api/v1/endpoints/webhook_endpoints.py|100.00%|100.00%|
 |core/crypto.py|100.00%|100.00%|
+|core/ratelimit.py|99.29%|99.29%|
+|core/ssrf.py|100.00%|100.00%|
 |domain/timeline.py|100.00%|100.00%|
+|middleware/rate_limit.py|100.00%|100.00%|
+|providers/manual.py|100.00%|100.00%|
 |providers/mock_v2.py|92.65%|92.65%|
 |providers/razorpay.py|92.68%|92.68%|
 |providers/resolution.py|100.00%|100.00%|
 |schemas/payment_config.py|100.00%|100.00%|
+|schemas/webhooks.py|100.00%|100.00%|
+|services/inbound_payments.py|98.00%|98.00%|
+|services/outbound_webhooks.py|98.04%|92.16%|
 |services/payment_config.py|91.89%|91.89%|
 |services/payment_events.py|100.00%|100.00%|
-|api/v1/endpoints/payment_config.py|100.00%|100.00%|
-|services/inbound_payments.py|98.00%|98.00%|
-|services/provider_events.py|95.50%|97.30%|
-|services/refunds.py|92.17%|95.18%|
-|services/refund_intents.py|100.00%|100.00%|
-|services/payment_sessions.py|96.74%|98.91%|
-|services/payment_timing.py|100.00%|100.00%|
 |services/payment_expiry.py|100.00%|100.00%|
 |services/payment_reconciliation.py|97.53%|97.53%|
-|api/v1/endpoints/payment_webhooks.py|100.00%|100.00%|
-|TOTAL production|96.76%|96.96%|
+|services/payment_sessions.py|96.74%|98.91%|
+|services/payment_timing.py|100.00%|100.00%|
+|services/provider_events.py|95.50%|97.30%|
+|services/refund_intents.py|100.00%|100.00%|
+|services/refunds.py|92.17%|95.18%|
+|services/shipping.py|100.00%|100.00%|
+|services/webhook_delivery.py|98.35%|98.35%|
+|TOTAL production|97.15%|97.25%|
 
 ## B5. Migrations and legacy-data proof
 
-Current head:0017_payment_polling.0008 widens prefixes;0009 backfills synthetic
+Current head:0019_outbound_webhooks.0008 widens prefixes;0009 backfills synthetic
 timeline;0010 stores encrypted configs;0011 adds portable sessions;0012/13/14
 add receipt/refund/claim journals;0015 scopes receipt uniqueness;0016 indexes
 expiry;0017 adds separate polling checkpoints. No native enum labels change.
@@ -494,21 +757,30 @@ refuses cross-tenant old-key conflicts; receipt/outbox rows remain intact.
 ```text
 0007->HEAD->0007->HEAD: LEGACY ORDER/PAYMENT/ITEM/INVENTORY/PREFIX/HASH AND NATIVE ENUM LABELS PRESERVED
 OPERATIONAL CHECKPOINT DOWNGRADE REFUSAL: BEFORE DATA LOSS; FINANCIAL SNAPSHOT UNCHANGED
-0007->HEAD->0007->HEAD: LEGACY ORDER/PAYMENT/ITEM/INVENTORY/PREFIX/HASH AND NATIVE ENUM LABELS PRESERVED
-OPERATIONAL CHECKPOINT DOWNGRADE REFUSAL: BEFORE DATA LOSS; FINANCIAL SNAPSHOT UNCHANGED
-TENANT RECEIPT LEGACY ROUNDTRIP PASS; CONFLICTING DOWNGRADE REFUSED BEFORE DDL; RECEIPTS/INTENT PRESERVED
-TENANT RECEIPT LEGACY ROUNDTRIP PASS; CONFLICTING DOWNGRADE REFUSED BEFORE DDL; RECEIPTS/INTENT PRESERVED
+SHIPPING LEGACY ROUNDTRIP: IDS/80-CHAR CARRIER/120-CHAR TRACKING/MONEY PRESERVED; OPERATIONAL DOWNGRADE REFUSED
+OUTBOUND WEBHOOK EMPTY ROUNDTRIP PASS; OPERATIONAL CONFIG/DELIVERY/CLAIM DOWNGRADE REFUSED WITHOUT LOSS
 ```
 
 Operational local upgrade stopped writers, preserved volumes and applied:
 ```text
 0014_refund_claims ->0015_tenant_receipts ->0016_expiry_index ->0017_payment_polling
 ```
-The final running schema is checked in B6. Other migration tests cover encryption,
+The reviewed Part 1 operational schema is recorded in B6; it is not the current test head. Other migration tests cover encryption,
 session/backfill journals and claim metadata refusal; arbitrary populated
 production downgrade is not asserted.
 
-## B6. Docker acceptance and restored runtime
+0018 adds tenant provider and URL/date metadata without narrowing legacy
+carrier/tracking or changing enums.0019 adds endpoint/delivery/claim tables with
+portable statuses. Empty/reconstructible downgrade works; operational shipping or
+webhook history/configuration refuses before loss. Current full PG suite also
+reruns the0007→head→0007→head financial/stock/hash/native-enum preservation test.
+The operational Docker database was not upgraded/rerun for this selected scope;
+its retained Part 1 schema/runtime below is reviewed evidence, not current-head proof.
+
+## B6. Reviewed Part 1 Docker proof and runtime
+
+These retained outputs predate3B.6/3B.7. They are not a current-tree Docker or
+operational0019 deployment claim; new-scope Docker checks remain unverified.
 
 Real local PostgreSQL, RabbitMQ, Redis, API, prefork worker, scheduler and relay
 run the cases below. The runner preserves existing volumes, creates unique proof
@@ -587,6 +859,13 @@ The temporary quota container is removed; normal shared quota counters are not
 cleared. Temporary overrides/keys are unlinked and only the fixture's own dummy
 config is removed. Operational proof orders/journals remain for review.
 
+Scoped Part 2 qualification: the outputs above are the reviewed Part 1 Docker
+run. They were not rerun after3B.6/3B.7, and the old operational0017 head is not a
+claim of deployment at0019. E19/E22/E23/E24 and full current-tree Docker regressions
+remain NOT VERIFIED;3B.13 and dev-tools infrastructure were not selected. This
+scope's API, HTTP transport, migration and concurrency proofs use test databases
+and mocked external network transports, as required by the test isolation rule.
+
 ## B7. Concurrency, lock and isolation proofs
 
 ```text
@@ -610,8 +889,26 @@ uncommitted, then another session NOWAIT-locks order/inventory/payment/claim row
 during the provider call. A real webhook finishes during that fetch; the later
 synthetic receipt causes no second financial effect. Expiry during a fetch still
 journals the late financial truth. Original session/refund NOWAIT and crash/lease/
-callback tests remain green. The exact43-route registry and80-case ownership matrix
+callback tests remain green. The reviewed Part 1 route registry and80-case ownership matrix
 are supplemented by credential roles, two-tenant receipt and checkpoint controls.
+
+Scoped Part 2 proof:
+
+```text
+OUTBOUND HTTP IN FLIGHT: TENANT/ENDPOINT/DELIVERY NOWAIT AND OWNER ROTATION PASS; PEER SKIP LOCKED; ONE SEND
+```
+
+PG uses separate sessions/threads: a peer skips an uncommitted endpoint claim,
+then tenant/endpoint/delivery NOWAIT and owner rotation succeed during actual
+HTTPX MockTransport execution. A peer also skips the committed live lease. One
+attempt/send completes. Requests use pinned numeric IP with original Host/SNI.
+SSRF tests cover every requested literal class, mixed private DNS answers, port/
+scheme/userinfo/encoding validation, OS resolver errors and forbidden production
+bypass; redirects are not followed and response streaming is capped. Privacy
+checks cover owner-only management, foreign IDs, secret show-once/rotation/list
+masking, all semantic aliases and buyer-PII exclusion. The exact54-route registry
+retains the base80-case matrix and adds shipping/JWT/key/foreign ownership plus
+eight-route owner/privacy controls.
 
 ## B8. Razorpay verification ledger
 
@@ -646,20 +943,21 @@ does not claim live execution. Application-only fields are labelled INTERNAL.
 |Duplicate warehouse/inventory errors, dummy login hash |Typed409 and uniform hash work retained |
 |Payment/refund I/O under locks |Detached sessions/refunds/polling, real NOWAIT proofs |
 |Abuse and transactional history |Implemented and verified |
-|Shipping/tracking/notifications/SSE/failed-jobs HTTP |Part 2 |
+|Shipping lifecycle / seller webhooks |Resolved in3B.6/3B.7; current proofs above |
+|Tracking/notifications/SSE/failed-jobs HTTP |Remaining Part 2 |
 |RLS/global email uniqueness/HA/monitoring/deployment |Existing limitations, outside Part 1 |
 
 ## B10. Changed files and commits
 
-Final delivery tree relative to main (report included; column spacing condensed):
+Delivery tree against main, including this report (column spacing condensed):
 ```text
 .dockerignore | 1 +
- .env.example | 41 +-
+ .env.example | 54 +-
  .github/workflows/ci.yml | 7 +
  .gitignore | 1 +
- README.md | 126 +++-
+ README.md | 126 ++-
  alembic/versions/0008_api_key_prefix.py | 25 +
- alembic/versions/0009_order_timeline.py | 42 ++
+ alembic/versions/0009_order_timeline.py | 42 +
  alembic/versions/0010_payment_config.py | 36 +
  alembic/versions/0011_payment_sessions.py | 37 +
  alembic/versions/0012_inbound_webhooks.py | 31 +
@@ -668,17 +966,22 @@ Final delivery tree relative to main (report included; column spacing condensed)
  alembic/versions/0015_tenant_receipts.py | 29 +
  alembic/versions/0016_payment_expiry_index.py | 16 +
  alembic/versions/0017_payment_reconciliation.py | 31 +
+ alembic/versions/0018_manual_shipping.py | 35 +
+ alembic/versions/0019_outbound_webhooks.py | 69 ++
  app/api/v1/endpoints/health.py | 7 +-
  app/api/v1/endpoints/inventory.py | 72 +-
- app/api/v1/endpoints/payment_config.py | 41 ++
- app/api/v1/endpoints/payment_webhooks.py | 41 ++
+ app/api/v1/endpoints/payment_config.py | 41 +
+ app/api/v1/endpoints/payment_webhooks.py | 41 +
+ app/api/v1/endpoints/shipments.py | 104 +-
  app/api/v1/endpoints/tenancy.py | 5 +-
- app/api/v1/router.py | 15 +-
+ app/api/v1/endpoints/webhook_endpoints.py | 200 ++++
+ app/api/v1/router.py | 18 +-
  app/auth/principal.py | 34 +-
- app/core/config.py | 67 +-
- app/core/crypto.py | 44 ++
+ app/core/config.py | 88 +-
+ app/core/crypto.py | 44 +
  app/core/exceptions.py | 8 +
- app/core/ratelimit.py | 246 +++++++
+ app/core/ratelimit.py | 246 +++++
+ app/core/ssrf.py | 70 ++
  app/domain/order_state.py | 18 +-
  app/domain/timeline.py | 61 ++
  app/events/contracts.py | 2 +
@@ -686,87 +989,105 @@ Final delivery tree relative to main (report included; column spacing condensed)
  app/main.py | 15 +-
  app/middleware/rate_limit.py | 73 ++
  app/models/__init__.py | 2 +
- app/models/entities.py | 116 ++-
+ app/models/entities.py | 170 ++-
  app/providers/contracts.py | 77 ++
- app/providers/mock_v2.py | 118 ++++
- app/providers/razorpay.py | 201 ++++++
- app/providers/resolution.py | 54 ++
+ app/providers/manual.py | 17 +
+ app/providers/mock_v2.py | 118 +++
+ app/providers/razorpay.py | 201 ++++
+ app/providers/registry.py | 10 +-
+ app/providers/resolution.py | 54 +
  app/repositories/base.py | 10 -
  app/repositories/inventory.py | 10 -
  app/schemas/inventory.py | 12 +
- app/schemas/orders.py | 16 +
+ app/schemas/orders.py | 18 +
  app/schemas/payment_config.py | 19 +
+ app/schemas/shipments.py | 37 +-
  app/schemas/tenancy.py | 3 +-
+ app/schemas/webhooks.py | 84 ++
  app/services/auth.py | 7 +-
  app/services/failed_jobs.py | 12 +-
- app/services/inbound_payments.py | 118 ++++
+ app/services/inbound_payments.py | 118 +++
  app/services/inventory.py | 14 +-
  app/services/orders.py | 9 +
+ app/services/outbound_webhooks.py | 121 +++
  app/services/payment_config.py | 64 ++
- app/services/payment_events.py | 42 ++
+ app/services/payment_events.py | 42 +
  app/services/payment_expiry.py | 59 ++
- app/services/payment_reconciliation.py | 303 ++++++++
- app/services/payment_sessions.py | 155 ++++
+ app/services/payment_reconciliation.py | 303 ++++++
+ app/services/payment_sessions.py | 155 +++
  app/services/payment_timing.py | 21 +
  app/services/payments.py | 17 +-
- app/services/provider_events.py | 181 +++++
+ app/services/provider_events.py | 181 ++++
  app/services/refund_intents.py | 74 ++
- app/services/refunds.py | 232 ++++++
- app/services/tenancy.py | 22 +-
+ app/services/refunds.py | 232 +++++
+ app/services/shipping.py | 101 +-
+ app/services/tenancy.py | 24 +-
+ app/services/webhook_delivery.py | 208 ++++
  app/tests/conftest.py | 24 +-
  app/tests/test_cancel_hardening.py | 7 +
  app/tests/test_consumers.py | 39 +-
  app/tests/test_failure_scenarios.py | 20 +-
- app/tests/test_inbound_migration.py | 57 ++
- app/tests/test_inbound_payments.py | 195 +++++
+ app/tests/test_inbound_migration.py | 57 +
+ app/tests/test_inbound_payments.py | 195 ++++
  app/tests/test_integration_carryover.py | 35 +
  app/tests/test_inventory_atomic.py | 21 +-
- app/tests/test_mock_v2.py | 102 +++
+ app/tests/test_mock_v2.py | 102 ++
  app/tests/test_order_recovery.py | 9 +-
  app/tests/test_order_state.py | 12 +-
- app/tests/test_order_timeline.py | 136 ++++
- app/tests/test_part1_verification.py | 254 +++++++
- app/tests/test_payment_config.py | 160 +++++
+ app/tests/test_order_timeline.py | 136 +++
+ app/tests/test_outbound_webhook_migration.py | 80 ++
+ app/tests/test_outbound_webhooks.py | 218 ++++
+ app/tests/test_part1_verification.py | 254 +++++
+ app/tests/test_payment_config.py | 160 +++
  app/tests/test_payment_config_migration.py | 74 ++
- app/tests/test_payment_expiry.py | 185 +++++
- app/tests/test_payment_reconciliation.py | 343 +++++++++
- app/tests/test_payment_reviews.py | 159 +++++
- app/tests/test_payment_scheduler_concurrency.py | 287 ++++++++
- app/tests/test_payment_sessions.py | 253 +++++++
+ app/tests/test_payment_expiry.py | 185 ++++
+ app/tests/test_payment_reconciliation.py | 343 +++++++
+ app/tests/test_payment_reviews.py | 159 +++
+ app/tests/test_payment_scheduler_concurrency.py | 287 ++++++
+ app/tests/test_payment_sessions.py | 253 +++++
  app/tests/test_payment_sessions_migration.py | 78 ++
- app/tests/test_postgres_reliability.py | 84 ++-
- app/tests/test_prefix_migration.py | 81 +++
+ app/tests/test_postgres_reliability.py | 84 +-
+ app/tests/test_prefix_migration.py | 81 ++
  app/tests/test_principal_auth.py | 2 +-
- app/tests/test_provider_events.py | 307 ++++++++
+ app/tests/test_provider_events.py | 307 ++++++
  app/tests/test_provider_inputs.py | 17 +
- app/tests/test_providers.py | 28 +-
- app/tests/test_ratelimit.py | 356 ++++++++++
- app/tests/test_razorpay.py | 189 +++++
- app/tests/test_receipt_tenant_uniqueness.py | 100 +++
+ app/tests/test_providers.py | 29 +-
+ app/tests/test_ratelimit.py | 356 +++++++
+ app/tests/test_razorpay.py | 189 ++++
+ app/tests/test_receipt_tenant_uniqueness.py | 108 ++
  app/tests/test_reconciliation_migration.py | 76 ++
- app/tests/test_refund_claim_migration.py | 111 +++
- app/tests/test_refund_migration.py | 90 +++
- app/tests/test_refund_worker.py | 462 ++++++++++++
+ app/tests/test_refund_claim_migration.py | 111 ++
+ app/tests/test_refund_migration.py | 90 ++
+ app/tests/test_refund_worker.py | 462 +++++++++
  app/tests/test_reliability_edges.py | 4 +-
- app/tests/test_remaining_carryover.py | 133 ++++
- app/tests/test_settings_hardening.py | 9 +-
- app/tests/test_tenant_isolation.py | 25 +-
- app/tests/test_timeline_migration.py | 105 +++
- app/workers/celery_app.py | 11 +
- app/workers/tasks.py | 139 +++-
- docs/reports/phase-3b-report.md | 904 ++++++++++++++++++++++++
+ app/tests/test_remaining_carryover.py | 133 +++
+ app/tests/test_settings_hardening.py | 10 +-
+ app/tests/test_shipping_lifecycle.py | 214 ++++
+ app/tests/test_shipping_migration.py | 93 ++
+ app/tests/test_ssrf.py | 129 +++
+ app/tests/test_tenancy_migration.py | 9 +-
+ app/tests/test_tenant_isolation.py | 36 +-
+ app/tests/test_timeline_migration.py | 105 ++
+ app/tests/test_webhook_delivery.py | 177 ++++
+ app/tests/test_webhook_delivery_postgres.py | 86 ++
+ app/workers/celery_app.py | 16 +
+ app/workers/tasks.py | 151 ++-
+ docs/reports/phase-3b-report.md | 1255 +++++++++++++++++++++++
  pytest.ini | 1 +
  requirements.txt | 1 +
- scripts/e2e_abuse_inventory.py | 236 +++++++
- scripts/e2e_integrations.py | 225 ++++++
- scripts/e2e_payments.py | 522 ++++++++++++++
- scripts/e2e_reliability.py | 114 ++-
+ scripts/e2e_abuse_inventory.py | 236 +++++
+ scripts/e2e_integrations.py | 225 ++++
+ scripts/e2e_payments.py | 522 ++++++++++
+ scripts/e2e_reliability.py | 114 +-
  scripts/e2e_tenancy.py | 4 +-
- scripts/verify_rate_timeline.py | 155 ++++
- 110 files changed, 10031 insertions(+), 128 deletions(-)
+ scripts/verify_rate_timeline.py | 155 +++
+ 130 files changed, 12548 insertions(+), 157 deletions(-)
 ```
-Implementation/verification log before this additional report-only commit:
+Implementation log before this report-only commit:
 ```text
+5570b95 feat(webhooks): add safe durable seller deliveries
+722e6f4 feat(shipping): add tenant manual lifecycle and COD delivery
+3d8e2c1 docs: add phase 3b part 1 report
 db98ac4 test(integrations): verify full Part 1 acceptance
 d33935c test(payments): prove scheduler races and lock-free provider polling
 122cb3b feat(payments): reconcile provider outcomes with durable polling leases
@@ -792,7 +1113,7 @@ fbc43ce docs: add phase 3b part 1 report
 1800ebd docs: add phase 3b integrations documentation and verification report
 6eb6b04 fix(security): harden login verification and duplicate inventory errors
 ```
-No remote push, PR or merge is performed.
+No push/PR/merge is performed.
 
 ## B11. Deviations and every modified existing test
 
@@ -817,12 +1138,12 @@ still patch send_task legitimately.
 |test_postgres_reliability::test_postgres_concurrent_duplicate_delivery |Drive new committed inbox phase after eight-way delivery; retain exact payment/shipment/stock counts |
 |test_postgres_reliability::test_postgres_two_tenants_same_sku_have_independent_stock |Separate4 status intents from4 business intents per tenant; retain ownership/stock strictness |
 |test_principal_auth::test_api_key_show_once_hash_uniform_auth_and_throttle |Expected prefix12→17 only; secrecy/hash/uniform/throttle controls retained |
-|test_providers::test_provider_registry_rejects_unknown_and_nonlocal_mock |Supply valid required encryption key; retain provider/permission rejections |
+|test_providers::test_provider_registry_rejects_unknown_and_nonlocal_mock |Supply required encryption key and production manual shipping; retain provider/permission rejections |
 |test_providers::test_provider_calls_persist_references_and_idempotency_keys |Detached refund result/request/worker; exact references, status and call list with durable key retained |
 |test_reliability_edges::test_missing_order_and_scheduled_task_controls |Tenant count replaces cross-store low-stock SKU aggregation; missing-order/scheduler controls retained |
-|test_settings_hardening::test_production_accepts_strong_secret |Supply newly required encryption key; retain strong-secret acceptance |
+|test_settings_hardening::test_production_accepts_strong_secret |Supply required key and production manual shipping; retain strong-secret acceptance |
 |test_tenant_isolation::test_tenant_resource_isolation_matrix |Add owned/foreign adjustment checks, retain all previous role/resource assertions |
-|test_tenant_isolation::test_route_registry_has_no_unclassified_routes |Classify settings/callback, require quotas, now exact set equality so stale declarations fail too |
+|test_tenant_isolation::test_route_registry_has_no_unclassified_routes |Classify payment/shipping/seller-webhook routes; preserve exact set equality and public quotas |
 |test_provider_events::test_invalid_or_extra_capture_creates_one_durable_refund_without_fulfillment |Expired fixture changes1→121 seconds to remain beyond default grace; identical late/refund assertions |
 |test_provider_events::test_ignored_notification_and_unmatched_refund_are_safe |Missing refund within the new window must retry, not silently process; existing nonmutation/other guards retained |
 
@@ -844,32 +1165,59 @@ through the broker while relay is stopped, including refund.requested, then chec
 the same stock/refund/shipment results. No synthetic assignment fakes financial
 state. The E15 setup is explicitly a local provider-session fixture, not remote
 session creation. Isolated temporary Redis preserves normal abuse counters;
-DB sidecar ignore rules prevent accidental packaging. No Part 2 endpoint, native
-enum addition or live money call is introduced.
+DB sidecar ignore rules prevent accidental packaging. No native enum label or live money call is introduced. Scoped Part 2 endpoints
+are documented in A12.
+
+Scoped Part 2 additionally modifies these shared migration fixtures; all original
+roundtrip/data/refusal assertions remain unchanged:
+
+| Existing test | Reason |
+|---|---|
+|test_receipt_tenant_uniqueness::test_sqlite_tenant_receipt_migration|Reflect0014 tenant columns rather than insert the new shipping field before it exists|
+|test_receipt_tenant_uniqueness::test_postgres_tenant_receipt_migration|Same shared historical seed correction|
+|test_tenancy_migration::test_sqlite_tenancy_legacy_roundtrip|Seed second tenant with reconstructible mock setting so the original multi-tenant refusal is still exercised|
+|test_tenancy_migration::test_postgres_tenancy_legacy_roundtrip|Same shared seed; no weakened assertion|
+
+The existing provider/strong-secret tests now explicitly use production manual
+shipping (required by the selected rule); their rejection/acceptance assertions
+remain strict. The existing registry test includes all11 new authenticated routes.
+New lifecycle, SSRF, delivery and concurrency tests are additional controls.
+Reusing carrier/tracking columns preserves legacy widths; no duplicate/narrowing
+columns were introduced. DELETE is soft to preserve delivery audit history. Each
+failed attempt counts toward auto-disable; replay resets attempts but not event ID.
+No other Part 2 task or real external network is implemented/called in tests.
 
 ## B12. Newly discovered issues
 
-Resolved: unmatched retry exhaustion/lost refund notices, missing grace, global
-receipt coupling, polling UUID-cursor starvation and lost stale fetched truth
-after expiry. Tests cover checkpoint ownership and journal-commit crash recovery.
-Runners now await broker/async boundaries and restore settings/quotas.
+Resolved selected-scope findings: stale shipment relationship in the immediate
+prepaid response; cancellation racing an unconsumed delivery; legacy migration
+fixtures using today's ORM before new columns; semantic status aliases colliding
+with generic subscriptions without distinct IDs; and DNS validation/connect
+rebinding, closed with numeric pinning and original Host/SNI. Earlier resolved
+financial/fairness issues remain covered by the current full suites.
 
-An intermediate combined PG/Docker run passed E1–E8 and cancellation/retry controls
-but hit RabbitMQ's 5-second health timeout during recreation. It is not counted as
-final acceptance. After broker recovery, the full sequential Docker rerun passed.
-No selected blocker remains. External/operator/deferred limits are in B13.
+No selected blocker remains. Webhook delivery is at least once, not a remote
+exactly-once guarantee. In-flight sends cannot be recalled after suspension,
+deletion, URL change or secret rotation. DNS timing and production routing need
+operator control; the local insecure override is forbidden non-locally. Body
+privacy is an allowlist, not free-text PII classification. Remaining verification
+limits are explicitly B13; no unrequested integration surfaces are added.
 
 ## B13. NOT VERIFIED
 
-- Live Razorpay credentials, real session/capture/refund/settlement, merchant
-  entitlement and remote concurrent visibility/idempotency guarantees. The live
-  test-mode case is skipped; HTTP acceptance uses declared local fixtures.
-- Hosted CI execution, production deployment, HA/failover/soak or multi-host proxy
-  operations. CI configuration and local PG+Redis layers are verified.
-- Part 2 shipping/notifications/outbound webhooks/tracking/SSE/failed-jobs HTTP.
-- Arbitrary production historical-data repair/rollback, simulator lookup-map
-  durability across process restarts, old signing-secret history and automatic
-  merchant-account migration. Tested legacy roundtrips/refusals remain verified.
+- Live Razorpay credentials, remote money/session/refund/settlement, merchant
+  entitlement, visibility races and remote idempotency guarantees; optional live
+  test mode is skipped. Razorpay contract ledger remains the reviewed B8 evidence.
+- Current-scope Docker E19/E22/E23/E24, current-tree Docker regressions and an
+  operational upgrade to0019. Part 1 Docker output is retained as reviewed evidence.
+- Live external webhook DNS/TLS/egress, hosted CI, production deployment, HA,
+  failover/soak and multi-host proxy/routing behavior. Tests never call real
+  external networks; IP/Host/SNI propagation is tested through MockTransport.
+- Unselected3B.8–3B.13: notifications/SMTP/dev-tools, public tracking, SSE,
+  failed-jobs HTTP, OpenAPI export/final docs gates and full-phase Docker proof.
+- Arbitrary production historical-data repair/rollback, simulator restart
+  durability, automatic merchant/signing-secret-history migration or generic
+  free-text PII detection. Tested sample roundtrips/refusals remain verified.
 
 ## B14. Reviewer commands (PowerShell)
 
@@ -888,6 +1236,9 @@ $env:COVERAGE_FILE='.coverage.review.postgres'
 .venv\Scripts\python -m pytest -q --cov=app --cov-report=term-missing
 .venv\Scripts\python -m pytest -q -s app/tests/test_payment_scheduler_concurrency.py
 .venv\Scripts\python -m pytest -q -s app/tests/test_part1_verification.py
+.venv\Scripts\python -m pytest -q -s app/tests/test_shipping_lifecycle.py app/tests/test_shipping_migration.py
+.venv\Scripts\python -m pytest -q -s app/tests/test_webhook_delivery_postgres.py app/tests/test_outbound_webhook_migration.py
+.venv\Scripts\python -m pytest -q app/tests/test_ssrf.py app/tests/test_outbound_webhooks.py app/tests/test_webhook_delivery.py
 docker compose stop api worker scheduler outbox-relay
 docker compose build
 docker compose run --rm migrate
