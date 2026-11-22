@@ -156,6 +156,7 @@ class Inventory(UUIDMixin, TimestampMixin, Base):
 class Order(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "orders"
     __table_args__ = (
+        Index("ix_orders_payment_expiry", "status", "payment_expires_at", "id"),
         UniqueConstraint("tenant_id", "principal_scope", "idempotency_key", name="uq_orders_tenant_principal_key"),
         Index("ix_orders_tenant_created", "tenant_id", "created_at"),
         Index("ix_orders_customer_status", "customer_id", "status"),

@@ -9,7 +9,14 @@ from app.models.enums import OrderStatus
 from app.repositories.outbox import OutboxRepository
 
 PUBLIC_REASON_CODES = frozenset(
-    {"INSUFFICIENT_INVENTORY", "PAYMENT_DECLINED", "PAYMENT_SESSION_FAILED", "SHIPMENT_FAILED", "RETRIES_EXHAUSTED"}
+    {
+        "INSUFFICIENT_INVENTORY",
+        "PAYMENT_DECLINED",
+        "PAYMENT_SESSION_FAILED",
+        "PAYMENT_EXPIRED",
+        "SHIPMENT_FAILED",
+        "RETRIES_EXHAUSTED",
+    }
 )
 
 

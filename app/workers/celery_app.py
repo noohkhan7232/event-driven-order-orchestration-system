@@ -25,6 +25,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
     task_routes={
+        "app.workers.tasks.expire_unpaid_orders": {"queue": "payments"},
         "app.workers.tasks.process_refund": {"queue": "payments"},
         "app.workers.tasks.process_event": {"queue": "orders"},
         "app.workers.tasks.check_low_stock": {"queue": "inventory"},
@@ -38,6 +39,10 @@ celery_app.conf.update(
         Queue("dead_letter", dead_letter_exchange, routing_key="dead_letter"),
     ),
     beat_schedule={
+        "expire-unpaid-orders": {
+            "task": "app.workers.tasks.expire_unpaid_orders",
+            "schedule": settings.payment_expiry_interval_seconds,
+        },
         "low-stock-scan-every-5-minutes": {
             "task": "app.workers.tasks.check_low_stock",
             "schedule": 300.0,

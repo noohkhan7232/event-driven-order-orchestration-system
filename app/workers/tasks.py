@@ -19,6 +19,7 @@ from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
+from app.services.payment_expiry import expire_orders
 from app.services.payment_sessions import handle_payment
 from app.services.payments import PaymentService
 from app.services.provider_events import UnmatchedPayment, process_provider_event
@@ -281,3 +282,8 @@ def check_low_stock() -> dict[str, int]:
 def detect_delayed_shipments() -> int:
     logger.info("delayed_shipment_scan_completed", delayed_count=0)
     return 0
+
+
+@celery_app.task(name="app.workers.tasks.expire_unpaid_orders")
+def expire_unpaid_orders() -> int:
+    return expire_orders(SessionLocal)
