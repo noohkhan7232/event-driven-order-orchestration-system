@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Event
@@ -5,6 +8,8 @@ from threading import Event
 import pytest
 from conftest import TestingSessionLocal
 from sqlalchemy import select
+from test_inbound_payments import webhook as webhook
+from test_payment_config import payment_settings as payment_settings
 from test_payment_reconciliation import drain_receipts, processing_refund
 from test_payment_reconciliation import polling as polling
 from test_provider_events import pending_payment as pending_payment
@@ -144,7 +149,9 @@ def test_postgres_expiry_vs_capture_has_one_winner_and_no_double_refund(
 
 
 @pytest.mark.parametrize("kind", ["payment", "refund"])
-def test_postgres_poll_schedulers_skip_locked_fetch_without_locks_and_dedupe_webhook(db, polling, monkeypatch, kind):
+def test_postgres_poll_schedulers_skip_locked_fetch_without_locks_and_dedupe_webhook(
+    db, polling, monkeypatch, kind, client, webhook
+):
     from app.services import payment_reconciliation
 
     (order, payment, stock), gateway, _, results = polling
@@ -191,18 +198,38 @@ def test_postgres_poll_schedulers_skip_locked_fetch_without_locks_and_dedupe_web
                         observer.scalar(select(column).where(column == identity).with_for_update(nowait=True))
                         == identity
                     )
-            actual = ProviderEvent(
-                "evt_actual_" + kind,
-                "payment_captured" if kind == "payment" else "refund_processed",
-                "order_provider" if kind == "payment" else None,
-                "pay_polled" if kind == "payment" else "pay_provider",
-                None if kind == "payment" else "rfnd_concurrent",
-                1000,
-                "INR",
-                {},
+            entity = {"amount": 1000, "currency": "INR"}
+            entity.update(
+                {"id": "pay_polled", "order_id": "order_provider"}
+                if kind == "payment"
+                else {"id": "rfnd_concurrent", "payment_id": "pay_provider", "status": "processed"}
             )
+            event_id = "evt_actual_" + kind
+            raw = json.dumps(
+                {
+                    "event": "payment.captured" if kind == "payment" else "refund.processed",
+                    "payload": {kind: {"entity": entity}},
+                }
+            ).encode()
+            headers = {
+                "X-Razorpay-Signature": hmac.new(b"synthetic-hook", raw, hashlib.sha256).hexdigest(),
+                "X-Razorpay-Event-Id": event_id,
+            }
+            assert webhook[1] == order.tenant_id
+            for _ in range(2):
+                response = client.post(webhook[0], content=raw, headers=headers)
+                assert response.status_code == 200 and response.json() == {"accepted": True}
             with TestingSessionLocal() as session:
-                event = stage_event(session, order.tenant_id, actual)
+                receipt = session.scalar(
+                    select(InboundWebhookEvent).where(
+                        InboundWebhookEvent.tenant_id == order.tenant_id,
+                        InboundWebhookEvent.provider_event_id == event_id,
+                    )
+                )
+                event = DomainEvent.model_validate(
+                    session.scalar(select(OutboxEvent).where(OutboxEvent.aggregate_id == receipt.id)).payload
+                )
+                session.commit()
                 process_provider_event(session, event)
             db.expire_all()
             assert (refund.status == "succeeded") if refund else (order.status == OrderStatus.PAID)

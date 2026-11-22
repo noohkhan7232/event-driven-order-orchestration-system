@@ -22,11 +22,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models.entities import (  # noqa: E402
     FailedJob,
+    InboundWebhookEvent,
     Inventory,
     Order,
     OutboxEvent,
     Payment,
     Product,
+    Refund,
     Shipment,
     User,
     Warehouse,
@@ -49,6 +51,22 @@ def compose(*args: str) -> str:
     if result.returncode:
         raise RuntimeError(f"{' '.join(command)}: {result.stdout}\n{result.stderr}")
     return result.stdout.strip()
+
+
+def worker_ready(timeout: float = 90) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            reply = compose(
+                "exec", "-T", "worker", "celery", "-A", "app.workers.celery_app", "inspect", "ping", "--timeout=3"
+            )
+            if "pong" in reply:
+                return
+        except RuntimeError:
+            if "worker" in compose("ps", "--status", "exited", "--services", "worker").splitlines():
+                compose("start", "worker")
+        time.sleep(1)
+    raise RuntimeError("Worker did not become broker-responsive")
 
 
 class Harness:
@@ -160,6 +178,8 @@ class Harness:
         assert self.stock(sku) == (quantity, 0)
         assert self.count(FailedJob, [order]) == 0
         if prefix == "FAIL-SHIPMENT-":
+            self.wait_refunds(order)
+            result = self.poll(order, "failed")
             assert result["payments"][0]["status"] == "refunded"
         if prefix == "FAIL-PAYMENT-":
             assert result["payments"][0]["status"] == "failed"
@@ -173,6 +193,7 @@ class Harness:
             time.sleep(1)
         finally:
             compose("start", "worker")
+            worker_ready()
         self.poll(order, "fulfillment_requested")
         assert self.stock(sku) == (9, 1)
         assert self.count(Payment, [order]) == self.count(Shipment, [order]) == 1
@@ -209,6 +230,7 @@ class Harness:
                 assert pending == 5, pending
         finally:
             compose("start", "rabbitmq")
+            worker_ready()
         for order in orders:
             self.poll(order, "fulfillment_requested")
         assert self.stock(sku) == (5, 5)
@@ -269,14 +291,25 @@ class Harness:
             os.environ["FAILURE_INJECTION_ENABLED"] = "false"
             try:
                 compose("up", "-d", "--no-deps", "--force-recreate", "worker")
+                worker_ready()
                 compose("exec", "-T", "api", "python", "-c", code)
                 self.poll(order, "fulfillment_requested")
                 assert self.stock(sku) == (9, 1)
-                assert self.count(Payment, [order]) == self.count(Shipment, [order]) == 1
+                assert self.count(Payment, [order]) == 2 and self.count(Shipment, [order]) == 1
+                with self.sessions() as db:
+                    attempts = list(db.scalars(select(Payment).where(Payment.order_id == UUID(order))))
+                    assert {(row.idempotency_key, row.provider_status) for row in attempts} == {
+                        (f"{order}:payment:1", "abandoned"),
+                        (f"{order}:payment:2", "captured"),
+                    }
             finally:
                 os.environ["FAILURE_INJECTION_ENABLED"] = "true"
                 compose("up", "-d", "--no-deps", "--force-recreate", "worker")
-            return "retries exhausted=3; compensated; fresh replay without injection completed; one payment/shipment"
+                worker_ready()
+            return (
+                "retries exhausted=3; stock compensated; replay completed; "
+                "one abandoned + one captured attempt, one shipment"
+            )
         assert self.stock(sku) == (9, 1)
         assert self.count(Payment, [order]) == self.count(Shipment, [order]) == 1
         return "transient retry succeeds; exactly one reservation/payment/shipment"
@@ -288,19 +321,27 @@ class Harness:
             for stage, state in enumerate(states):
                 sku = self.seed(f"cancel-{stage}")
                 order = self.create(sku)
-                for intermediate in states[1 : stage + 1]:
-                    code = (
-                        "from app.db.session import SessionLocal; from app.workers.outbox_relay import relay_once; "
-                        "db=SessionLocal(); relay_once(db,100); db.close()"
-                    )
-                    compose("exec", "-T", "api", "python", "-c", code)
+                for intermediate, kind in (
+                    ("inventory_reserved", "order.created"),
+                    ("payment_pending", "payment.requested"),
+                    ("paid", "payment.provider_event"),
+                    ("fulfillment_requested", "payment.authorized"),
+                ):
+                    if stage == 0:
+                        break
+                    self.publish_intent(order, kind)
                     self.poll(order, intermediate)
+                    if intermediate == state:
+                        break
                 for _ in range(2):
                     response = self.client.post(f"/api/v1/orders/{order}/cancel", headers=self.headers)
                     assert response.status_code == 200 and response.json()["status"] == "cancelled", response.text
                 assert self.stock(sku) == (10, 0), (state, self.stock(sku))
                 result = self.poll(order, "cancelled")
                 if stage >= 2:
+                    self.publish_intent(order, "refund.requested")
+                    self.wait_refunds(order)
+                    result = self.poll(order, "cancelled")
                     assert result["payments"][0]["status"] == "refunded"
                 if stage == 3:
                     assert result["shipments"][0]["status"] == "cancelled"
@@ -310,6 +351,59 @@ class Harness:
         finally:
             compose("start", "outbox-relay")
 
+    def wait_refunds(self, order_id: str) -> None:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            with self.sessions() as db:
+                rows = list(db.scalars(select(Refund).where(Refund.order_id == UUID(order_id))))
+                if rows and all(row.status == "succeeded" for row in rows):
+                    return
+                if any(row.status == "failed" for row in rows):
+                    raise AssertionError("Financial compensation failed")
+            time.sleep(0.2)
+        raise AssertionError("Refund completion timeout")
+
+    def publish_intent(self, order_id: str, kind: str) -> None:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            with self.sessions() as db:
+                aggregates = [UUID(order_id)]
+                if kind == "refund.requested":
+                    aggregates = list(db.scalars(select(Refund.id).where(Refund.order_id == UUID(order_id))))
+                elif kind == "payment.provider_event":
+                    references = set(
+                        db.scalars(select(Payment.provider_reference).where(Payment.order_id == UUID(order_id)))
+                    )
+                    receipts = db.scalars(
+                        select(InboundWebhookEvent).where(
+                            InboundWebhookEvent.tenant_id == self.tenant_id, InboundWebhookEvent.provider == "mock"
+                        )
+                    )
+                    aggregates = [
+                        row.id
+                        for row in receipts
+                        if any(event["provider_order_id"] in references for event in row.payload["events"])
+                    ]
+                identity = db.scalar(
+                    select(OutboxEvent.id).where(
+                        OutboxEvent.aggregate_id.in_(aggregates), OutboxEvent.event_type == kind
+                    )
+                )
+            if identity:
+                # Publish the actual committed intent; relay redelivery later
+                # tests idempotency. Never manufacture a financial state change.
+                code = (
+                    "from app.db.session import SessionLocal; from app.models.entities import OutboxEvent; "
+                    "from app.events.contracts import DomainEvent; from app.events.publisher import EventPublisher; "
+                    "from uuid import UUID; db=SessionLocal(); "
+                    f"row=db.get(OutboxEvent,UUID('{identity}')); "
+                    "EventPublisher().publish(DomainEvent.model_validate(row.payload),row.queue); db.close()"
+                )
+                compose("exec", "-T", "api", "python", "-c", code)
+                return
+            time.sleep(0.2)
+        raise AssertionError("Committed intent not ready: " + kind)
+
     def close(self) -> None:
         self.client.close()
         self.engine.dispose()
@@ -318,6 +412,7 @@ class Harness:
 def main() -> int:
     os.environ["FAILURE_INJECTION_ENABLED"] = "true"
     compose("up", "-d", "--no-build")
+    worker_ready()
     harness = Harness()
     passed: list[bool] = []
     try:
@@ -338,7 +433,10 @@ def main() -> int:
         for name, action in actions:
             passed.append(experiment(name, action))
     finally:
+        os.environ["FAILURE_INJECTION_ENABLED"] = "false"
         compose("start", "rabbitmq", "worker", "outbox-relay")
+        compose("up", "-d", "--no-build")
+        worker_ready()
         harness.close()
     print(f"RESULT: {sum(passed)}/{len(passed)} experiments passed", flush=True)
     print(compose("ps"), flush=True)

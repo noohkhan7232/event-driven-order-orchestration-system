@@ -1,13 +1,15 @@
-"""Scoped saga 4-6 Docker proofs; no external payment HTTP or real credentials.
+"""Part 1 Docker payment proofs; no external payment HTTP or real credentials.
 
 Creates unique demo rows. The HTTP capture proof explicitly relabels a pending
 mock session as a Razorpay fixture; it does not create a remote Razorpay order.
 Temporary encryption keys/config and worker overrides are removed in finally.
 """
 
+import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import sys
 import time
@@ -16,7 +18,6 @@ from uuid import UUID, uuid4
 
 import httpx
 from cryptography.fernet import Fernet
-from pydantic import SecretStr
 from sqlalchemy import func, select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,9 +33,7 @@ from app.models.entities import (  # noqa: E402
     TenantPaymentConfig,
 )
 from app.models.enums import PaymentStatus, ShipmentStatus  # noqa: E402
-from app.providers.razorpay import parse_signed  # noqa: E402
-from app.services.inbound_payments import stage_receipt  # noqa: E402
-from scripts.e2e_reliability import Harness, compose  # noqa: E402
+from scripts.e2e_reliability import Harness, compose, worker_ready  # noqa: E402
 from scripts.verify_rate_timeline import body, require  # noqa: E402
 
 
@@ -82,17 +81,92 @@ def capture(order_ref, amount, currency, payment_id):
 
 
 def stage_mock(harness, checkout, amount, payment_id):
-    # Exercise signature parsing + durable receipt/outbox, then the real relay and worker.
-    secret = secrets.token_urlsafe(32)
-    raw, headers = signature(
-        capture(checkout["provider_order_id"], amount, checkout["currency"], payment_id), secret, "evt_" + uuid4().hex
+    # Sign/verify inside the real worker with its configured simulator secret.
+    # Only non-secret financial fixture identifiers cross the CLI boundary.
+    encoded = base64.b64encode(
+        json.dumps(capture(checkout["provider_order_id"], amount, checkout["currency"], payment_id)).encode()
+    ).decode()
+    code = (
+        "import base64,hmac; from uuid import UUID; from app.core.config import get_settings; "
+        "from app.providers.mock_v2 import MockPaymentProviderV2; from app.db.session import SessionLocal; "
+        "from app.services.inbound_payments import stage_receipt; s=get_settings(); "
+        f"raw=base64.b64decode('{encoded}'); identity='evt_{uuid4().hex}'; "
+        "headers={'X-Razorpay-Event-Id':identity,'X-Razorpay-Signature':"
+        "hmac.new(s.mock_webhook_secret.get_secret_value().encode(),raw,'sha256').hexdigest()}; "
+        "notices=MockPaymentProviderV2(s).verify_and_parse_webhook(headers,raw,s.mock_webhook_secret); "
+        f"db=SessionLocal(); stage_receipt(db,'mock',UUID('{harness.tenant_id}'),identity,notices); "
+        "db.commit(); db.close()"
     )
-    notice = parse_signed(headers, raw, SecretStr(secret))
-    with harness.sessions.begin() as db:
-        stage_receipt(db, "mock", harness.tenant_id, notice[0].event_id, notice)
+    compose("exec", "-T", "worker", "python", "-c", code)
 
 
 def reliability(harness):
+    # Stop the real shipment consumer so PAID is observable without assigning
+    # financial state or racing an automatically created shipment.
+    def shipment_consumer(action):
+        compose(
+            "exec",
+            "-T",
+            "worker",
+            "celery",
+            "-A",
+            "app.workers.celery_app",
+            "control",
+            action,
+            "shipments",
+            "--timeout=15",
+        )
+
+    shipment_consumer("cancel_consumer")
+    try:
+        sku = harness.seed("paid-refund-retry")
+        identity = harness.create(sku)
+        harness.poll(identity, "paid")
+        for _ in range(2):
+            body(harness.client.post(f"/api/v1/orders/{identity}/cancel", headers=harness.headers), 200)
+        refund = refund_done(harness, identity, "ORDER_CANCELLED")
+        with harness.sessions() as db:
+            payment = db.get(Payment, refund.payment_id)
+            require(refund.attempts == 3 and payment.status == PaymentStatus.REFUNDED, "PAID refund retry mismatch")
+            require(
+                db.scalar(select(func.count()).select_from(Shipment).where(Shipment.order_id == UUID(identity))) == 0,
+                "PAID cancellation created a shipment",
+            )
+            require(
+                db.scalar(
+                    select(func.count())
+                    .select_from(AuditLog)
+                    .where(
+                        AuditLog.entity_id == payment.id,
+                        AuditLog.action == "payment_refunded",
+                    )
+                )
+                == 1,
+                "PAID cancellation duplicated the refund audit",
+            )
+            require(
+                db.scalar(
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(
+                        OutboxEvent.aggregate_id == UUID(identity),
+                        OutboxEvent.event_type == "refund.succeeded",
+                    )
+                )
+                == 1,
+                "PAID cancellation duplicated the success intent",
+            )
+        require(harness.stock(sku) == (10, 0), "PAID cancellation stock mismatch")
+        print(
+            "PASS E20 PAID: real shipment consumer paused; attempts=3; one refund/audit/intent; stock restored",
+            flush=True,
+        )
+    finally:
+        shipment_consumer("add_consumer")
+    fulfilled_refund_reliability(harness)
+
+
+def fulfilled_refund_reliability(harness):
     sku = harness.seed("refund-retry")
     identity = harness.create(sku)
     harness.poll(identity, "fulfillment_requested")
@@ -167,7 +241,7 @@ def mismatch_and_late(harness):
     )
     print(
         "PASS late-cancel pipeline: signed late payment refunded, cancellation and stock preserved "
-        "(expiry scheduling outside scope)",
+        "(beat expiry is checked separately by E16)",
         flush=True,
     )
 
@@ -311,28 +385,84 @@ def http_capture():
         harness.engine.dispose()
 
 
+def expiry_and_late(harness):
+    sku = harness.seed("expiry-late")
+    identity = harness.create(sku)
+    checkout = wait(
+        lambda: body(harness.client.get(f"/api/v1/orders/{identity}", headers=harness.headers), 200)["checkout"],
+        "expiry checkout",
+    )
+    expired = harness.poll(identity, "failed")
+    require(
+        expired["failure_reason"] == "PAYMENT_EXPIRED" and harness.stock(sku) == (10, 0),
+        "Beat expiry did not release stock",
+    )
+    payment_id = "mock_expired_" + harness.run_id
+    for _ in range(2):
+        stage_mock(harness, checkout, checkout["amount_minor"], payment_id)
+    refund_done(harness, identity, "LATE_PAYMENT")
+    result = body(harness.client.get(f"/api/v1/orders/{identity}", headers=harness.headers), 200)
+    require(
+        result["status"] == "failed" and not result["shipments"] and harness.stock(sku) == (10, 0),
+        "Late payment changed expired order",
+    )
+    with harness.sessions() as db:
+        require(
+            db.scalar(select(func.count()).select_from(Refund).where(Refund.order_id == UUID(identity))) == 1,
+            "Duplicate late refund",
+        )
+        require(
+            db.scalar(
+                select(func.count())
+                .select_from(OutboxEvent)
+                .where(OutboxEvent.aggregate_id == UUID(identity), OutboxEvent.event_type == "refund.succeeded")
+            )
+            == 1,
+            "Duplicate late refund success",
+        )
+    print(
+        "PASS E16: actual beat expiry after window+grace, stock restored; "
+        "signed late capture twice, one succeeded refund, no fulfillment",
+        flush=True,
+    )
+
+
 def main():
     harness = Harness()
     override = Path(f".coverage-refund-compose-{harness.run_id}.yaml")
     key = Fernet.generate_key().decode()
 
-    def configure(auto, failures):
+    def configure(auto, failures, window=1800, grace=120, interval=30):
+        timing = {
+            "PAYMENT_WINDOW_SECONDS": str(window),
+            "PAYMENT_CAPTURE_GRACE_SECONDS": str(grace),
+            "PAYMENT_EXPIRY_INTERVAL_SECONDS": str(interval),
+            "PAYMENT_RECONCILE_AFTER_SECONDS": "3600",
+        }
         override.write_text(
             json.dumps(
                 {
                     "services": {
-                        "api": {"environment": {"CREDENTIALS_ENCRYPTION_KEY": key}},
+                        "api": {
+                            "environment": {
+                                "CREDENTIALS_ENCRYPTION_KEY": key,
+                                "RATE_LIMIT_REDIS_URL": os.environ.get("E2E_RATE_BACKEND_URL", ""),
+                                **timing,
+                            }
+                        },
                         "worker": {
                             "environment": {
                                 "MOCK_PAYMENT_AUTO_COMPLETE": str(auto).lower(),
                                 "MOCK_REFUND_FAIL_ATTEMPTS": str(failures),
+                                **timing,
                             }
                         },
+                        "scheduler": {"environment": timing},
                     }
                 }
             )
         )
-        compose("-f", "docker-compose.yml", "-f", str(override), "up", "-d", "--no-build", "api", "worker")
+        compose("-f", "docker-compose.yml", "-f", str(override), "up", "-d", "--no-build", "api", "worker", "scheduler")
 
         def ready():
             try:
@@ -341,6 +471,7 @@ def main():
                 return False
 
         wait(ready, "API ready")
+        worker_ready()
 
     try:
         configure(True, 2)
@@ -349,9 +480,12 @@ def main():
         configure(False, 0)
         mismatch_and_late(harness)
         http_capture()
+        configure(False, 0, window=3, grace=2, interval=1)
+        expiry_and_late(harness)
     finally:
         try:
-            compose("up", "-d", "--no-build", "api", "worker")
+            compose("up", "-d", "--no-build", "api", "worker", "scheduler")
+            worker_ready()
             for service in ("api", "worker"):
                 runtime = compose(
                     "exec",

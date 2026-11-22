@@ -1,23 +1,27 @@
-"""Selected Part1 session experiments against the local mock stack.
+"""Full Part 1 Docker acceptance, with targeted --section reruns.
 
-Creates unique rows, temporarily disables worker auto-completion, and restores
-the base Compose worker configuration in finally. Prints no credentials/bodies.
+    Uses unique fixture data and isolated Redis quotas; restores base runtime values
+and preserves volumes. Razorpay HTTP ingestion uses dummy session fixtures only.
 """
 
+import argparse
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models.entities import Payment  # noqa: E402
-from scripts.e2e_reliability import Harness, compose  # noqa: E402
+from scripts.e2e_reliability import Harness, compose, worker_ready  # noqa: E402
 from scripts.verify_rate_timeline import body, require  # noqa: E402
 
 
-def main() -> None:
+def session_cod() -> None:
     harness = Harness()
     override = Path(f".coverage-session-compose-{harness.run_id}.yaml")
     try:
@@ -25,6 +29,7 @@ def main() -> None:
         sku = harness.seed("sessions")
         override.write_text('services:\n  worker:\n    environment:\n      MOCK_PAYMENT_AUTO_COMPLETE: "false"\n')
         compose("-f", "docker-compose.yml", "-f", str(override), "up", "-d", "--no-build", "worker")
+        worker_ready()
         identity = harness.create(sku)
         pending = harness.poll(identity, "payment_pending")
         # PAYMENT_PENDING is committed before provider I/O, so wait for checkout too.
@@ -67,10 +72,11 @@ def main() -> None:
         )
         body(harness.client.post(f"/api/v1/orders/{created['id']}/cancel", headers=harness.headers), 200)
         require(harness.stock(sku) == (10, 0), "COD cancellation did not conserve stock")
-        print("PASS E18 subset: COD fulfillment without session; cancellation releases stock and shipment")
+        print("PASS E18: COD fulfillment without session; cancellation releases stock and shipment")
     finally:
         try:
             compose("up", "-d", "--no-build", "worker")
+            worker_ready()
             runtime = compose(
                 "exec",
                 "-T",
@@ -93,6 +99,126 @@ def main() -> None:
             override.unlink(missing_ok=True)
             harness.client.close()
             harness.engine.dispose()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Part 1 Docker acceptance; preserves existing volumes/data")
+    parser.add_argument("--section", choices=("all", "legacy", "payments", "abuse", "sessions"), default="all")
+    section = parser.parse_args().section
+    root = Path(__file__).resolve().parents[1]
+    override = root / (".coverage-part1-compose-" + uuid4().hex + ".yaml")
+    names = ("COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "FAILURE_INJECTION_ENABLED", "E2E_RATE_BACKEND_URL")
+    original = {name: os.environ.get(name) for name in names}
+    # Fresh, volume-free Redis keeps every HTTP quota real and repeatable without
+    # consuming or deleting a seller's normal shared abuse windows.
+    rate_service = "proof-rate-" + uuid4().hex[:10]
+    rate_url = "redis://" + rate_service + ":6379/0"
+    override.write_text(
+        json.dumps(
+            {
+                "services": {
+                    rate_service: {
+                        "image": "redis:7-alpine",
+                        "tmpfs": ["/data"],
+                        "healthcheck": {
+                            "test": ["CMD", "redis-cli", "ping"],
+                            "interval": "1s",
+                            "timeout": "2s",
+                            "retries": 30,
+                        },
+                    },
+                    "api": {
+                        "environment": {"RATE_LIMIT_REDIS_URL": rate_url},
+                        "depends_on": {rate_service: {"condition": "service_healthy"}},
+                    },
+                }
+            }
+        )
+    )
+    os.environ["COMPOSE_PATH_SEPARATOR"] = os.pathsep
+    os.environ["COMPOSE_FILE"] = os.pathsep.join((str(root / "docker-compose.yml"), str(override)))
+    os.environ["E2E_RATE_BACKEND_URL"] = rate_url
+    commands = []
+    if section in {"all", "legacy"}:
+        commands.extend(("e2e_reliability.py", "e2e_tenancy.py"))
+    if section in {"all", "payments"}:
+        commands.append("e2e_payments.py")
+    if section in {"all", "abuse"}:
+        commands.append("e2e_abuse_inventory.py")
+    failures = []
+    try:
+        compose("config", "--quiet")
+        compose("up", "-d", "--no-build", "--wait", rate_service)
+        print("ISOLATED Redis HTTP quotas; normal quota counters and all data volumes preserved", flush=True)
+        for filename in commands:
+            result = subprocess.run([sys.executable, str(root / "scripts" / filename)], check=False)  # noqa: S603
+            if result.returncode:
+                failures.append(filename)
+        if section in {"all", "sessions"}:
+            session_cod()
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        try:
+            os.environ["FAILURE_INJECTION_ENABLED"] = "false"
+            compose("up", "-d", "--no-build")
+            worker_ready()
+            for service in ("api", "worker", "scheduler"):
+                runtime = compose(
+                    "exec",
+                    "-T",
+                    service,
+                    "python",
+                    "-c",
+                    "import json; from app.core.config import get_settings; s=get_settings(); "
+                    "print(json.dumps({'auto_complete':s.mock_payment_auto_complete,"
+                    "'refund_failures':s.mock_refund_fail_attempts,'window':s.payment_window_seconds,"
+                    "'grace':s.payment_capture_grace_seconds,'expiry_interval':s.payment_expiry_interval_seconds,"
+                    "'reconcile_after':s.payment_reconcile_after_seconds,"
+                    "'reconcile_interval':s.payment_reconcile_interval_seconds,"
+                    "'failure_injection':s.failure_injection_enabled,"
+                    "'shared_rate_backend':bool(s.rate_limit_redis_url),"
+                    "'rate_backend_is_default':s.rate_limit_redis_url=='redis://redis:6379/2',"
+                    "'encryption_configured':s.credentials_encryption_key is not None}))",
+                )
+                values = json.loads(runtime)
+                require(
+                    values
+                    == {
+                        "auto_complete": True,
+                        "refund_failures": 0,
+                        "window": 1800,
+                        "grace": 120,
+                        "expiry_interval": 30,
+                        "reconcile_after": 60,
+                        "reconcile_interval": 60,
+                        "failure_injection": False,
+                        "shared_rate_backend": True,
+                        "rate_backend_is_default": True,
+                        "encryption_configured": False,
+                    },
+                    "Part 1 defaults not restored",
+                )
+                print("RESTORED " + service + " " + runtime, flush=True)
+        finally:
+            if original["FAILURE_INJECTION_ENABLED"] is None:
+                os.environ.pop("FAILURE_INJECTION_ENABLED", None)
+            else:
+                os.environ["FAILURE_INJECTION_ENABLED"] = original["FAILURE_INJECTION_ENABLED"]
+            try:
+                compose(
+                    "-f", str(root / "docker-compose.yml"), "-f", str(override), "rm", "-f", "-s", "-v", rate_service
+                )
+            finally:
+                override.unlink(missing_ok=True)
+        restored = compose("ps", "-a")
+        require(rate_service not in restored, "Temporary quota service was not removed")
+        print(restored, flush=True)
+    require(not failures, "Failed acceptance scripts: " + ",".join(failures))
+    print("PASS selected Part 1 acceptance section: " + section, flush=True)
 
 
 if __name__ == "__main__":

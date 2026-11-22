@@ -205,7 +205,7 @@ def test_route_registry_has_no_unclassified_routes():
         ("POST", "/api/v1/admin/tenants/{tenant_id}/activate"),
     }
     actual = {(method, route.path) for route in app.routes for method in route.methods}
-    assert not actual - (public | public_webhook | tenant | platform)
+    assert actual == public | public_webhook | tenant | platform
     from app.core.config import get_settings
     from app.core.ratelimit import policies_for
 
