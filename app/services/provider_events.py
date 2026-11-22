@@ -16,6 +16,7 @@ from app.models.enums import OrderStatus, PaymentStatus
 from app.providers.contracts import ProviderEvent, minor_units
 from app.repositories.orders import OrderRepository
 from app.services.payment_events import apply_capture
+from app.services.payment_timing import capture_expired, database_now
 from app.services.refund_intents import request_refund, succeed_refund
 from app.services.refunds import fail_refund
 
@@ -57,8 +58,7 @@ def captured_charge(db: Session, order: Order, payment: Payment, notice: Provide
     )
     if known and known.status in {PaymentStatus.AUTHORIZED, PaymentStatus.CAPTURED, PaymentStatus.REFUNDED}:
         return
-    now = db.scalar(select(func.now())) or datetime.now(UTC)
-    expired = order.payment_expires_at is not None and aware(order.payment_expires_at) <= aware(now)
+    expired = capture_expired(order.payment_expires_at, database_now(db))
     if order.status == OrderStatus.PAYMENT_PENDING and not expired:
         reason = (
             "AMOUNT_MISMATCH"

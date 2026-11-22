@@ -109,3 +109,51 @@ def test_unmatched_worker_retry_outlives_ordinary_retry_count(db, pending_paymen
     assert 1 <= calls[0]["countdown"] <= 10 and calls[0]["max_retries"] is None
     assert tasks.process_event.max_retries is None
     assert tasks.process_event.retry_kwargs["max_retries"] == 3
+
+
+@pytest.mark.parametrize("seconds,accepted", [(119, True), (120, False), (121, False)])
+def test_capture_grace_inside_exact_boundary_and_outside(db, pending_payment, monkeypatch, seconds, accepted):
+    from app.auth.principal import aware
+    from app.services import provider_events
+
+    order, payment, stock = pending_payment
+    now = aware(db.scalar(select(func.now())))
+    monkeypatch.setattr(provider_events, "database_now", lambda db: now, raising=False)
+    order.payment_expires_at = now - timedelta(seconds=seconds)
+    db.commit()
+    deliver(db, order)
+    if accepted:
+        assert order.status == OrderStatus.PAID and payment.status == PaymentStatus.AUTHORIZED
+        assert db.query(Refund).count() == 0
+    else:
+        assert order.status == OrderStatus.PAYMENT_PENDING and payment.status == PaymentStatus.INITIATED
+        assert db.query(Refund).one().reason == "LATE_PAYMENT"
+    assert (stock.available_quantity, stock.reserved_quantity) == (9, 1)
+
+
+def test_terminal_order_never_uses_capture_grace(db, pending_payment, monkeypatch):
+    from app.auth.principal import aware
+    from app.domain.order_state import transition
+    from app.services import provider_events
+
+    order, _, _ = pending_payment
+    now = aware(db.scalar(select(func.now())))
+    monkeypatch.setattr(provider_events, "database_now", lambda db: now, raising=False)
+    order.payment_expires_at = now - timedelta(seconds=1)
+    transition(order, OrderStatus.CANCELLED, db=db)
+    db.commit()
+    deliver(db, order)
+    assert order.status == OrderStatus.CANCELLED and db.query(Refund).one().reason == "LATE_PAYMENT"
+
+
+def test_grace_is_configurable_and_missing_expiry_is_not_expired(monkeypatch):
+    from datetime import UTC, datetime
+
+    from app.core.config import get_settings
+    from app.services.payment_timing import capture_cutoff, capture_expired
+
+    assert get_settings().payment_capture_grace_seconds == 120
+    now = datetime.now(UTC)
+    assert not capture_expired(None, now)
+    monkeypatch.setattr(get_settings(), "payment_capture_grace_seconds", 0)
+    assert capture_cutoff(now) == now and capture_expired(now, now)

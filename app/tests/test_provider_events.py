@@ -88,7 +88,7 @@ def test_invalid_or_extra_capture_creates_one_durable_refund_without_fulfillment
     if kind == "cancelled":
         transition(order, OrderStatus.CANCELLED, db=db)
     if kind == "expired":
-        order.payment_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        order.payment_expires_at = datetime.now(UTC) - timedelta(seconds=121)
     if kind == "duplicate":
         deliver(db, order)
     db.commit()
