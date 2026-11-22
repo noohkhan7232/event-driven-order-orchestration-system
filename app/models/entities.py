@@ -323,7 +323,7 @@ class Refund(UUIDMixin, TimestampMixin, Base):
 
 class InboundWebhookEvent(UUIDMixin, Base):
     __tablename__ = "inbound_webhook_events"
-    __table_args__ = (UniqueConstraint("provider", "provider_event_id", name="uq_inbound_provider_event"),)
+    __table_args__ = (UniqueConstraint("provider", "tenant_id", "provider_event_id", name="uq_inbound_provider_event"),)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     provider: Mapped[str] = mapped_column(String(40), nullable=False)
     provider_event_id: Mapped[str] = mapped_column(String(200), nullable=False)

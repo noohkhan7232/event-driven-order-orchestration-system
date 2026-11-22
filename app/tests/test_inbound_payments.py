@@ -80,6 +80,38 @@ def test_deactivated_configuration_still_accepts_verified_financial_callbacks(cl
     assert client.post(webhook[0], content=body, headers=headers).status_code == 200
 
 
+def test_two_tenants_accept_the_same_event_id_without_receipt_or_secret_leakage(client, db, webhook):
+    from app.models.entities import InboundWebhookEvent, OutboxEvent, Tenant
+
+    tenant = Tenant(name="Independent webhook seller", slug="independent-hook")
+    db.add(tenant)
+    db.commit()
+    _, auth = identity(db, tenant_id=tenant.id)
+    config = client.put(
+        "/api/v1/settings/payments/razorpay",
+        headers=auth,
+        json={
+            "key_id": "independent1234",
+            "key_secret": "synthetic-api",
+            "webhook_secret": "synthetic-hook",
+            "mode": "test",
+        },
+    )
+    assert config.status_code == 200
+    second_path = "/api/v1/webhooks/payments/razorpay/" + config.json()["webhook_public_id"]
+    body, headers = signed(event_id="evt_shared")
+    for path in (webhook[0], second_path):
+        for _ in range(2):
+            response = client.post(path, content=body, headers=headers)
+            assert response.status_code == 200 and response.json() == {"accepted": True}
+            for private in ("synthetic-api", "synthetic-hook", "private-buyer", "synthetic-private-data"):
+                assert private not in response.text
+    assert db.query(InboundWebhookEvent).count() == 2
+    intents = db.query(OutboxEvent).filter_by(event_type="payment.provider_event").all()
+    assert len(intents) == 2 and {row.tenant_id for row in intents} == {webhook[1], tenant.id}
+    assert "private-buyer" not in repr([row.payload for row in db.query(InboundWebhookEvent)])
+
+
 @pytest.mark.parametrize("case", ["missing", "wrong", "changed", "event_missing", "malformed", "oversized"])
 def test_inbound_bad_signatures_and_bodies_persist_nothing(client, db, webhook, case):
     from app.models.entities import InboundWebhookEvent, OutboxEvent
