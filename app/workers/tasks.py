@@ -19,6 +19,7 @@ from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
+from app.services.outbound_webhooks import fanout
 from app.services.payment_expiry import expire_orders
 from app.services.payment_reconciliation import reconcile_payments
 from app.services.payment_sessions import handle_payment
@@ -26,6 +27,7 @@ from app.services.payments import PaymentService
 from app.services.provider_events import UnmatchedPayment, process_provider_event
 from app.services.refunds import RefundBusy, record_refund_failure, run_refund
 from app.services.shipping import ShippingService, apply_shipment_status
+from app.services.webhook_delivery import run_delivery_batch
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -178,6 +180,7 @@ def process_event(self, raw_event: dict) -> None:
                         EventNames.PAYMENT_AUTHORIZED: _create_shipment,
                     }[event.event_type]
                     step(db, order, event)
+            fanout(db, order, event)
             db.commit()
         except UnmatchedPayment as exc:
             db.rollback()
@@ -295,3 +298,8 @@ def expire_unpaid_orders() -> int:
 @celery_app.task(name="app.workers.tasks.reconcile_pending_payments")
 def reconcile_pending_payments() -> dict[str, int]:
     return reconcile_payments(SessionLocal)
+
+
+@celery_app.task(name="app.workers.tasks.deliver_webhooks")
+def deliver_webhooks() -> dict[str, int]:
+    return run_delivery_batch(SessionLocal, get_settings())

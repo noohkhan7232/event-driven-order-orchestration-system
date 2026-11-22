@@ -310,6 +310,46 @@ class AuditLog(UUIDMixin, TimestampMixin, Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
+class WebhookEndpoint(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "webhook_endpoints"
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    events: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_reason: Mapped[str | None] = mapped_column(String(80))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WebhookDelivery(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint("endpoint_id", "event_id", name="uq_webhook_endpoint_event"),
+        Index("ix_webhook_delivery_due", "status", "next_attempt_at"),
+        Index("ix_webhook_delivery_owner", "tenant_id", "endpoint_id", "created_at"),
+        CheckConstraint("status IN ('pending','delivered','failed','dead')", name="ck_webhook_delivery_status"),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    endpoint_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("webhook_endpoints.id"), nullable=False)
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_status_code: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(240))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replay_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Refund(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "refunds"
     __table_args__ = (

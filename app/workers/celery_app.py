@@ -25,6 +25,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
     task_routes={
+        "app.workers.tasks.deliver_webhooks": {"queue": "orders"},
         "app.workers.tasks.expire_unpaid_orders": {"queue": "payments"},
         "app.workers.tasks.reconcile_pending_payments": {"queue": "payments"},
         "app.workers.tasks.process_refund": {"queue": "payments"},
@@ -40,6 +41,10 @@ celery_app.conf.update(
         Queue("dead_letter", dead_letter_exchange, routing_key="dead_letter"),
     ),
     beat_schedule={
+        "deliver-webhooks": {
+            "task": "app.workers.tasks.deliver_webhooks",
+            "schedule": settings.webhook_delivery_interval_seconds,
+        },
         "expire-unpaid-orders": {
             "task": "app.workers.tasks.expire_unpaid_orders",
             "schedule": settings.payment_expiry_interval_seconds,

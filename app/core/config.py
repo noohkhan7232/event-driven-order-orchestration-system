@@ -72,6 +72,17 @@ class Settings(BaseSettings):
     payment_reconcile_interval_seconds: float = Field(default=60, gt=0)
     payment_reconcile_lease_seconds: int = Field(default=60, ge=1)
     refund_lease_seconds: int = Field(default=60, ge=1)
+    webhook_allow_insecure_targets: bool = False
+    webhook_extra_allowed_ports: list[int] = Field(default_factory=list)
+    webhook_max_attempts: int = Field(default=8, ge=1, le=100)
+    webhook_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    webhook_response_max_bytes: int = Field(default=1024, ge=1, le=65536)
+    webhook_retry_base_seconds: float = Field(default=600, gt=0)
+    webhook_retry_max_seconds: float = Field(default=43200, gt=0)
+    webhook_disable_after_failures: int = Field(default=20, ge=1)
+    webhook_delivery_interval_seconds: float = Field(default=10, gt=0)
+    webhook_delivery_batch_size: int = Field(default=100, ge=1, le=1000)
+    webhook_lease_seconds: int = Field(default=60, ge=1)
     public_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
 
     @field_validator("credentials_encryption_key")
@@ -94,6 +105,12 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_production_secret(self) -> Self:
         local = self.environment in {"local", "development", "test"}
+        if not local and self.webhook_allow_insecure_targets:
+            raise ValueError("Insecure webhook targets are forbidden outside local/development/test")
+        if any(port < 1 or port > 65535 for port in self.webhook_extra_allowed_ports):
+            raise ValueError("Invalid webhook port allowlist")
+        if self.webhook_lease_seconds <= self.webhook_timeout_seconds:
+            raise ValueError("Webhook lease must exceed HTTP timeout")
         if self.mock_payment_auto_complete is None:
             self.mock_payment_auto_complete = local
         if not local and self.mock_payment_auto_complete:
