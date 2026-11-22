@@ -88,7 +88,7 @@ def test_invalid_or_extra_capture_creates_one_durable_refund_without_fulfillment
     if kind == "cancelled":
         transition(order, OrderStatus.CANCELLED, db=db)
     if kind == "expired":
-        order.payment_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        order.payment_expires_at = datetime.now(UTC) - timedelta(seconds=121)
     if kind == "duplicate":
         deliver(db, order)
     db.commit()
@@ -251,7 +251,8 @@ def test_ignored_notification_and_unmatched_refund_are_safe(db, pending_payment)
     tasks.process_event.run(queued.payload)
     assert db.get(InboundWebhookEvent, identity).status == "ignored"
     deliver(db, order)
-    deliver(db, order, kind="refund_processed", refund_id="rfnd_unknown")
+    with pytest.raises(TransientError):
+        deliver(db, order, kind="refund_processed", refund_id="rfnd_unknown")
     assert payment.status == PaymentStatus.AUTHORIZED
     deliver(db, order, amount=2000, payment_id="pay_extra")
     with pytest.raises(TransientError):

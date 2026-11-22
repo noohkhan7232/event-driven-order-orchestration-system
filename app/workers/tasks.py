@@ -19,11 +19,15 @@ from app.repositories.orders import OrderRepository
 from app.repositories.outbox import OutboxRepository
 from app.services.failed_jobs import record_failure
 from app.services.inventory import InventoryService
+from app.services.outbound_webhooks import fanout
+from app.services.payment_expiry import expire_orders
+from app.services.payment_reconciliation import reconcile_payments
 from app.services.payment_sessions import handle_payment
 from app.services.payments import PaymentService
-from app.services.provider_events import process_provider_event
+from app.services.provider_events import UnmatchedPayment, process_provider_event
 from app.services.refunds import RefundBusy, record_refund_failure, run_refund
-from app.services.shipping import ShippingService
+from app.services.shipping import ShippingService, apply_shipment_status
+from app.services.webhook_delivery import run_delivery_batch
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -98,7 +102,13 @@ def process_refund(self, refund_id: str) -> None:
         raise self.retry(countdown=busy.seconds) from None
 
 
-@celery_app.task(bind=True, base=ResilientTask, name="app.workers.tasks.process_event")
+class EventTask(ResilientTask):
+    # Explicit unmatched-notice retries are bounded by receipt age. Ordinary
+    # technical failures retain the finite autoretry budget in retry_kwargs.
+    max_retries = None
+
+
+@celery_app.task(bind=True, base=EventTask, name="app.workers.tasks.process_event")
 def process_event(self, raw_event: dict) -> None:
     try:
         event = DomainEvent.model_validate(raw_event)
@@ -139,6 +149,8 @@ def process_event(self, raw_event: dict) -> None:
                 EventNames.INVENTORY_RESERVED: OrderStatus.INVENTORY_RESERVED,
                 EventNames.PAYMENT_AUTHORIZED: OrderStatus.PAID,
             }
+            if event.event_type == "shipment.status_changed":
+                apply_shipment_status(db, order, event)
             if (
                 event.event_type == EventNames.ORDER_STATUS_CHANGED
                 and order.payment_method == "cod"
@@ -168,7 +180,11 @@ def process_event(self, raw_event: dict) -> None:
                         EventNames.PAYMENT_AUTHORIZED: _create_shipment,
                     }[event.event_type]
                     step(db, order, event)
+            fanout(db, order, event)
             db.commit()
+        except UnmatchedPayment as exc:
+            db.rollback()
+            raise self.retry(exc=exc, countdown=exc.retry_after, max_retries=None) from None
         except (BusinessError, TransientError, OperationalError):
             db.rollback()
             raise
@@ -272,3 +288,18 @@ def check_low_stock() -> dict[str, int]:
 def detect_delayed_shipments() -> int:
     logger.info("delayed_shipment_scan_completed", delayed_count=0)
     return 0
+
+
+@celery_app.task(name="app.workers.tasks.expire_unpaid_orders")
+def expire_unpaid_orders() -> int:
+    return expire_orders(SessionLocal)
+
+
+@celery_app.task(name="app.workers.tasks.reconcile_pending_payments")
+def reconcile_pending_payments() -> dict[str, int]:
+    return reconcile_payments(SessionLocal)
+
+
+@celery_app.task(name="app.workers.tasks.deliver_webhooks")
+def deliver_webhooks() -> dict[str, int]:
+    return run_delivery_batch(SessionLocal, get_settings())

@@ -7,6 +7,7 @@ venv
 .env.*
 !.env.example
 *.db
+*.db-*
 *.sqlite*
 .pytest_cache
 .ruff_cache

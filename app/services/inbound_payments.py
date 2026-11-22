@@ -78,13 +78,13 @@ def stage_receipt(
     except IntegrityError:
         existing = db.scalar(
             select(InboundWebhookEvent).where(
-                InboundWebhookEvent.provider == provider, InboundWebhookEvent.provider_event_id == event_id
+                InboundWebhookEvent.provider == provider,
+                InboundWebhookEvent.tenant_id == tenant_id,
+                InboundWebhookEvent.provider_event_id == event_id,
             )
         )
         if existing is None:
             raise
-        if existing.tenant_id != tenant_id:
-            raise InvalidWebhook() from None
         return existing.id
 
 

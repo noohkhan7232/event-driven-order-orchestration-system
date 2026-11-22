@@ -1,12 +1,13 @@
 import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -27,6 +28,12 @@ from app.db.base import Base, TimestampMixin, UUIDMixin
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus, ShipmentStatus, UserRole
 
 DEFAULT_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+def default_shipping_provider() -> str:
+    from app.core.config import get_settings
+
+    return get_settings().shipping_provider
 
 
 class OrderTimeline(Base):
@@ -53,6 +60,9 @@ class Tenant(UUIDMixin, TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
     default_currency: Mapped[str] = mapped_column(String(3), default="INR", server_default="INR", nullable=False)
+    shipping_provider: Mapped[str] = mapped_column(
+        String(16), default=default_shipping_provider, server_default="manual", nullable=False
+    )
 
     @validates("slug")
     def validate_slug(self, key: str, value: str) -> str:
@@ -156,6 +166,7 @@ class Inventory(UUIDMixin, TimestampMixin, Base):
 class Order(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "orders"
     __table_args__ = (
+        Index("ix_orders_payment_expiry", "status", "payment_expires_at", "id"),
         UniqueConstraint("tenant_id", "principal_scope", "idempotency_key", name="uq_orders_tenant_principal_key"),
         Index("ix_orders_tenant_created", "tenant_id", "created_at"),
         Index("ix_orders_customer_status", "customer_id", "status"),
@@ -270,6 +281,8 @@ class Shipment(UUIDMixin, TimestampMixin, Base):
     tracking_number: Mapped[str | None] = mapped_column(String(120), unique=True)
     status: Mapped[ShipmentStatus] = mapped_column(Enum(ShipmentStatus), default=ShipmentStatus.PENDING, nullable=False)
     estimated_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tracking_url: Mapped[str | None] = mapped_column(String(300))
+    estimated_delivery: Mapped[date | None] = mapped_column(Date)
 
     order: Mapped[Order] = relationship(back_populates="shipments")
     events: Mapped[list["ShipmentEvent"]] = relationship(back_populates="shipment", cascade="all, delete-orphan")
@@ -295,6 +308,46 @@ class AuditLog(UUIDMixin, TimestampMixin, Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     action: Mapped[str] = mapped_column(String(120), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class WebhookEndpoint(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "webhook_endpoints"
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    events: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_reason: Mapped[str | None] = mapped_column(String(80))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WebhookDelivery(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint("endpoint_id", "event_id", name="uq_webhook_endpoint_event"),
+        Index("ix_webhook_delivery_due", "status", "next_attempt_at"),
+        Index("ix_webhook_delivery_owner", "tenant_id", "endpoint_id", "created_at"),
+        CheckConstraint("status IN ('pending','delivered','failed','dead')", name="ck_webhook_delivery_status"),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    endpoint_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("webhook_endpoints.id"), nullable=False)
+    event_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_status_code: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(240))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replay_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Refund(UUIDMixin, TimestampMixin, Base):
@@ -323,7 +376,7 @@ class Refund(UUIDMixin, TimestampMixin, Base):
 
 class InboundWebhookEvent(UUIDMixin, Base):
     __tablename__ = "inbound_webhook_events"
-    __table_args__ = (UniqueConstraint("provider", "provider_event_id", name="uq_inbound_provider_event"),)
+    __table_args__ = (UniqueConstraint("provider", "tenant_id", "provider_event_id", name="uq_inbound_provider_event"),)
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
     provider: Mapped[str] = mapped_column(String(40), nullable=False)
     provider_event_id: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -331,6 +384,18 @@ class InboundWebhookEvent(UUIDMixin, Base):
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="received", nullable=False)
+
+
+class PaymentReconciliation(TimestampMixin, Base):
+    __tablename__ = "payment_reconciliation"
+
+    payment_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("payments.id"), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    order_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orders.id"), nullable=False)
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(80))
 
 
 class FailedJob(UUIDMixin, TimestampMixin, Base):

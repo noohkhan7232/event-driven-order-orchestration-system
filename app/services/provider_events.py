@@ -1,5 +1,6 @@
 """Apply verified financial notifications under an owned order lock."""
 
+import math
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -7,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.principal import aware
+from app.core.config import get_settings
 from app.core.exceptions import TransientError
 from app.events.contracts import DomainEvent
 from app.models.entities import AuditLog, InboundWebhookEvent, Order, Payment, ProcessedEvent, Refund
@@ -14,8 +16,34 @@ from app.models.enums import OrderStatus, PaymentStatus
 from app.providers.contracts import ProviderEvent, minor_units
 from app.repositories.orders import OrderRepository
 from app.services.payment_events import apply_capture
+from app.services.payment_timing import capture_expired, database_now
 from app.services.refund_intents import request_refund, succeed_refund
 from app.services.refunds import fail_refund
+
+
+class UnmatchedPayment(TransientError):
+    def __init__(self, retry_after: int) -> None:
+        self.retry_after = retry_after
+        super().__init__("Payment reference not yet available")
+
+
+def unmatched_notice(db: Session, receipt: InboundWebhookEvent) -> None:
+    receipt = db.scalars(
+        select(InboundWebhookEvent)
+        .where(InboundWebhookEvent.id == receipt.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+    if receipt.status in {"processed", "ignored"}:
+        db.commit()
+        return
+    now = aware(db.scalar(select(func.now())) or datetime.now(UTC))
+    remaining = get_settings().payment_unmatched_retry_seconds - (now - aware(receipt.received_at)).total_seconds()
+    if remaining > 0:
+        raise UnmatchedPayment(min(30, max(1, math.ceil(remaining))))
+    receipt.status = "ignored"
+    db.add(AuditLog(entity_type="inbound_webhook_event", entity_id=receipt.id, action="UNMATCHED_PAYMENT", payload={}))
+    db.commit()
 
 
 def captured_charge(db: Session, order: Order, payment: Payment, notice: ProviderEvent, event: DomainEvent) -> None:
@@ -30,8 +58,7 @@ def captured_charge(db: Session, order: Order, payment: Payment, notice: Provide
     )
     if known and known.status in {PaymentStatus.AUTHORIZED, PaymentStatus.CAPTURED, PaymentStatus.REFUNDED}:
         return
-    now = db.scalar(select(func.now())) or datetime.now(UTC)
-    expired = order.payment_expires_at is not None and aware(order.payment_expires_at) <= aware(now)
+    expired = capture_expired(order.payment_expires_at, database_now(db))
     if order.status == OrderStatus.PAYMENT_PENDING and not expired:
         reason = (
             "AMOUNT_MISMATCH"
@@ -62,22 +89,24 @@ def captured_charge(db: Session, order: Order, payment: Payment, notice: Provide
     request_refund(db, order, charge, reason, notice.currency, event.correlation_id)
 
 
-def refund_notice(db: Session, order: Order, payment: Payment, notice: ProviderEvent) -> None:
+def refund_notice(db: Session, order: Order, payment: Payment, notice: ProviderEvent) -> bool:
     refund = db.scalar(
         select(Refund)
         .where(Refund.tenant_id == order.tenant_id, Refund.payment_id == payment.id)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if refund is None or refund.status == "succeeded":
-        return
+    if refund is None:
+        return False
+    if refund.status == "succeeded":
+        return True
     if (
         minor_units(refund.amount) != notice.amount_minor
         or refund.currency != notice.currency
         or (refund.provider_refund_id is not None and refund.provider_refund_id != notice.provider_refund_id)
     ):
         db.add(AuditLog(entity_type="refund", entity_id=refund.id, action="REFUND_REFERENCE_MISMATCH", payload={}))
-        return
+        return True
     if notice.provider_refund_id is None:
         raise TransientError("Missing refund identity")
     if notice.type == "refund_processed":
@@ -85,6 +114,7 @@ def refund_notice(db: Session, order: Order, payment: Payment, notice: ProviderE
     else:
         refund.provider_refund_id = notice.provider_refund_id
         fail_refund(db, refund, "provider_refund_failed")
+    return True
 
 
 def process_provider_event(db: Session, event: DomainEvent) -> None:
@@ -118,7 +148,8 @@ def process_provider_event(db: Session, event: DomainEvent) -> None:
             )
         payment = db.scalar(query)
         if payment is None:
-            raise TransientError("Payment reference not yet available")
+            unmatched_notice(db, receipt)
+            return
         order = OrderRepository(db).get_with_details(payment.order_id, tenant_id=receipt.tenant_id, for_update=True)
         if order is None:
             raise TransientError("Payment order unavailable")
@@ -139,7 +170,9 @@ def process_provider_event(db: Session, event: DomainEvent) -> None:
                 payment.provider_status = "failed"
                 db.add(AuditLog(entity_type="payment", entity_id=payment.id, action="payment_failed", payload={}))
         else:
-            refund_notice(db, order, payment, notice)
+            if not refund_notice(db, order, payment, notice):
+                unmatched_notice(db, receipt)
+                return
         receipt.status = "processed"
         db.add(ProcessedEvent(consumer="payment_provider", event_id=event.event_id))
         db.commit()

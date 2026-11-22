@@ -173,6 +173,17 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("POST", "/api/v1/webhook-endpoints"),
+        ("GET", "/api/v1/webhook-endpoints"),
+        ("PATCH", "/api/v1/webhook-endpoints/{endpoint_id}"),
+        ("DELETE", "/api/v1/webhook-endpoints/{endpoint_id}"),
+        ("POST", "/api/v1/webhook-endpoints/{endpoint_id}/rotate-secret"),
+        ("POST", "/api/v1/webhook-endpoints/{endpoint_id}/test"),
+        ("GET", "/api/v1/webhook-endpoints/{endpoint_id}/deliveries"),
+        ("POST", "/api/v1/webhook-endpoints/{endpoint_id}/deliveries/{delivery_id}/replay"),
+        ("PATCH", "/api/v1/shipments/{shipment_id}"),
+        ("GET", "/api/v1/settings/shipping"),
+        ("PATCH", "/api/v1/settings/shipping"),
         ("PUT", "/api/v1/settings/payments/razorpay"),
         ("GET", "/api/v1/settings/payments/razorpay"),
         ("DELETE", "/api/v1/settings/payments/razorpay"),
@@ -205,7 +216,7 @@ def test_route_registry_has_no_unclassified_routes():
         ("POST", "/api/v1/admin/tenants/{tenant_id}/activate"),
     }
     actual = {(method, route.path) for route in app.routes for method in route.methods}
-    assert not actual - (public | public_webhook | tenant | platform)
+    assert actual == public | public_webhook | tenant | platform
     from app.core.config import get_settings
     from app.core.ratelimit import policies_for
 

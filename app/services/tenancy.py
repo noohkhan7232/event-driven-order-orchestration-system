@@ -34,7 +34,7 @@ def register_tenant(db: Session, payload: TenantRegister, *, settings: Settings 
         raise RegistrationClosed("Registration is closed")
     stem = re.sub(r"[^a-z0-9]+", "-", payload.business_name.lower()).strip("-")[:29] or "store"
     slug = payload.slug or f"{stem}-{uuid4().hex[:8]}"
-    tenant = Tenant(name=payload.business_name, slug=slug)
+    tenant = Tenant(name=payload.business_name, slug=slug, shipping_provider=settings.shipping_provider)
     try:
         db.add(tenant)
         db.flush()

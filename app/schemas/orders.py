@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -50,6 +50,8 @@ class ShipmentRead(BaseModel):
     carrier: str
     tracking_number: str | None
     status: ShipmentStatus
+    tracking_url: str | None
+    estimated_delivery: date | None
 
     model_config = {"from_attributes": True}
 

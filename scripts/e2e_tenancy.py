@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.auth.security import hash_password  # noqa: E402
 from app.models.entities import User  # noqa: E402
 from app.models.enums import UserRole  # noqa: E402
-from scripts.e2e_reliability import Harness, compose, experiment  # noqa: E402
+from scripts.e2e_reliability import Harness, compose, experiment, worker_ready  # noqa: E402
 
 
 class TenancyHarness(Harness):
@@ -208,6 +208,7 @@ class TenancyHarness(Harness):
 def main() -> int:
     os.environ["FAILURE_INJECTION_ENABLED"] = "true"
     compose("up", "-d", "--no-build")
+    worker_ready()
     harness = TenancyHarness()
     passed = []
     try:
@@ -225,6 +226,7 @@ def main() -> int:
     finally:
         os.environ["FAILURE_INJECTION_ENABLED"] = "false"
         compose("up", "-d", "--no-build")
+        worker_ready()
         harness.close()
     print(f"RESULT: {sum(passed)}/{len(passed)} tenancy experiments passed", flush=True)
     print(compose("ps"), flush=True)
