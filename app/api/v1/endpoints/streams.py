@@ -33,7 +33,7 @@ def response(request: Request, db: Session, scope: StreamScope, settings: Settin
     return StreamResponse(reader, lease)
 
 
-@router.get("/stream", response_class=StreamResponse, responses=STREAM_SCHEMA)
+@router.get("/stream", status_code=200, response_class=StreamResponse, responses=STREAM_SCHEMA)
 def stream_orders(
     request: Request,
     order_id: UUID | None = None,
@@ -58,7 +58,7 @@ def stream_orders(
     return response(request, db, scope, settings, last_event_id if last_event_id is not None else cursor)
 
 
-@public_router.get("/{token}/stream", response_class=StreamResponse, responses=STREAM_SCHEMA)
+@public_router.get("/{token}/stream", status_code=200, response_class=StreamResponse, responses=STREAM_SCHEMA)
 def stream_tracking(
     token: str,
     request: Request,

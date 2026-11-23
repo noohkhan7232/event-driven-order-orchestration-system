@@ -17,8 +17,10 @@ from app.models.entities import Order, OrderTimeline, Tenant
 def stream_settings():
     settings = get_settings().model_copy(
         update={
-            "sse_max_seconds": 0.08,
-            "sse_poll_seconds": 0.005,
+            # Leave room for PostgreSQL reads under coverage. The independent
+            # blocked-send proof exercises the hard deadline at 30ms.
+            "sse_max_seconds": 0.3,
+            "sse_poll_seconds": 0.01,
             "sse_heartbeat_seconds": 0.02,
             "sse_lookback_seconds": 0.01,
             "sse_batch_size": 2,
@@ -186,6 +188,7 @@ def test_reader_does_not_overtake_unread_backlog_with_buffered_high_id(db, workf
 async def test_stream_disconnect_releases_lease_and_closes_reader_sessions(db, workflow, stream_settings, monkeypatch):
     from app.services.sse import StreamResponse, StreamScope, TimelineReader
 
+    stream_settings.sse_max_seconds = 2
     order, _ = workflow
     reader = TimelineReader(TestingSessionLocal, StreamScope(order.tenant_id), stream_settings)
     polled = []
@@ -217,7 +220,7 @@ async def test_stream_disconnect_releases_lease_and_closes_reader_sessions(db, w
 
     response = StreamResponse(reader, Lease())
     await response({"type": "http"}, receive, send)
-    assert released == [True] and polled
+    assert released == [True] and polled and ready.is_set()
 
 
 def test_stream_caps_outage_api_keys_and_lease_reuse(client, db, workflow, stream_settings, monkeypatch):

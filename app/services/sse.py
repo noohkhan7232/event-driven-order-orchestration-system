@@ -240,13 +240,30 @@ def acquire_stream(tenant_id: UUID, ip: str, settings: Settings) -> StreamLease:
 class StreamResponse(StreamingResponse):
     def __init__(self, reader: TimelineReader, lease: Releasable):
         self.lease = lease
+        self.maximum = reader.settings.sse_max_seconds
         super().__init__(
             reader.events(), media_type="text/event-stream", headers={**PUBLIC_HEADERS, "X-Accel-Buffering": "no"}
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        started = complete = False
+
+        async def tracked_send(message):
+            nonlocal started, complete
+            await send(message)
+            if message["type"] == "http.response.start":
+                started = True
+            elif message["type"] == "http.response.body" and not message.get("more_body", False):
+                complete = True
+
         try:
-            await super().__call__(scope, receive, send)
+            with anyio.move_on_after(self.maximum) as deadline:
+                await super().__call__(scope, receive, tracked_send)
+            if deadline.cancel_called and started and not complete:
+                # Terminate a timed-out stream even when the client stopped
+                # consuming a body chunk. Do not let finalization block forever.
+                with anyio.move_on_after(1):
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
         finally:
             # Covers cancellation/send failure even before the generator starts.
             with anyio.CancelScope(shield=True):
