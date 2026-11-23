@@ -59,6 +59,7 @@ class Tenant(UUIDMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     slug: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    notifications_enabled: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
     default_currency: Mapped[str] = mapped_column(String(3), default="INR", server_default="INR", nullable=False)
     shipping_provider: Mapped[str] = mapped_column(
         String(16), default=default_shipping_provider, server_default="manual", nullable=False
@@ -189,6 +190,20 @@ class Order(UUIDMixin, TimestampMixin, Base):
     failure_reason: Mapped[str | None] = mapped_column(Text)
     payment_method: Mapped[str] = mapped_column(String(12), default="prepaid", server_default="prepaid", nullable=False)
     payment_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tracking_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+
+    @property
+    def tracking_token(self) -> str:
+        from app.core.config import get_settings
+        from app.services.tracking import make_token
+
+        return make_token(self.id, self.tracking_version, get_settings())
+
+    @property
+    def tracking_url(self) -> str:
+        from app.core.config import get_settings
+
+        return str(get_settings().public_tracking_base_url).rstrip("/") + "/api/v1/public/track/" + self.tracking_token
 
     @property
     def payment_status(self) -> str | None:
@@ -308,6 +323,28 @@ class AuditLog(UUIDMixin, TimestampMixin, Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     action: Mapped[str] = mapped_column(String(120), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class Notification(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint("order_id", "channel", "template", name="uq_order_channel_template"),
+        CheckConstraint("status IN ('pending','sent','failed','skipped')", name="ck_notification_status"),
+        Index("ix_notification_due", "status", "next_attempt_at"),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id"), nullable=False)
+    order_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orders.id"), nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    template: Mapped[str] = mapped_column(String(40), nullable=False)
+    recipient_hint: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(80))
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class WebhookEndpoint(UUIDMixin, TimestampMixin, Base):

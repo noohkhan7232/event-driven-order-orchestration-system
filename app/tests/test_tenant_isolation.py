@@ -157,6 +157,7 @@ def test_route_registry_has_no_unclassified_routes():
     from app.main import app
 
     public_webhook = {("POST", "/api/v1/webhooks/payments/{provider}/{webhook_public_id}")}
+    public_tracking = {("GET", "/api/v1/public/track/{token}")}
     public = {
         ("GET", "/docs"),
         ("HEAD", "/docs"),
@@ -173,6 +174,9 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("POST", "/api/v1/orders/{order_id}/tracking/rotate"),
+        ("GET", "/api/v1/settings/notifications"),
+        ("PATCH", "/api/v1/settings/notifications"),
         ("POST", "/api/v1/webhook-endpoints"),
         ("GET", "/api/v1/webhook-endpoints"),
         ("PATCH", "/api/v1/webhook-endpoints/{endpoint_id}"),
@@ -216,11 +220,11 @@ def test_route_registry_has_no_unclassified_routes():
         ("POST", "/api/v1/admin/tenants/{tenant_id}/activate"),
     }
     actual = {(method, route.path) for route in app.routes for method in route.methods}
-    assert actual == public | public_webhook | tenant | platform
+    assert actual == public | public_webhook | public_tracking | tenant | platform
     from app.core.config import get_settings
     from app.core.ratelimit import policies_for
 
-    assert all(policies_for(method, path, get_settings()) for method, path in public | public_webhook)
+    assert all(policies_for(method, path, get_settings()) for method, path in public | public_webhook | public_tracking)
 
 
 def test_tenant_owner_cannot_read_platform_endpoints(client, db):

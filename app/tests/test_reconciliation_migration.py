@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 import sqlalchemy as sa
 from alembic.config import Config
+from legacy_orders import seed_legacy_order
 from sqlalchemy.orm import Session
 
 from alembic import command
@@ -20,14 +21,14 @@ def roundtrip(url, monkeypatch):
     try:
         command.upgrade(config, "0016_expiry_index")
         with Session(engine) as db:
-            order = Order(
+            order = seed_legacy_order(
+                db,
                 tenant_id=DEFAULT_TENANT_ID,
                 principal_scope="tenant",
                 idempotency_key="legacy-poll",
                 status=OrderStatus.PAYMENT_PENDING,
                 total_amount=10,
             )
-            db.add(order)
             db.flush()
             payment = Payment(order_id=order.id, provider="mock", amount=10, provider_reference="order_legacy")
             db.add(payment)

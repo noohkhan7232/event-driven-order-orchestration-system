@@ -17,6 +17,8 @@ def test_provider_registry_rejects_unknown_and_nonlocal_mock():
         secret_key="x" * 32,
         allow_mock_providers=True,
         shipping_provider="manual",
+        notifications_allow_console=True,
+        tracking_token_secret="t" * 32,
         credentials_encryption_key=Fernet.generate_key().decode(),
     )
 

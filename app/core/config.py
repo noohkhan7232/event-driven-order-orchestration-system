@@ -84,6 +84,23 @@ class Settings(BaseSettings):
     webhook_delivery_batch_size: int = Field(default=100, ge=1, le=1000)
     webhook_lease_seconds: int = Field(default=60, ge=1)
     public_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
+    notifications_backend: str = "console"
+    notifications_allow_console: bool = False
+    smtp_host: str = "mailpit"
+    smtp_port: int = Field(default=1025, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from: str = "noreply@example.com"
+    smtp_use_tls: bool = False
+    smtp_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    notification_max_attempts: int = Field(default=4, ge=1, le=20)
+    notification_retry_seconds: float = Field(default=60, gt=0)
+    notification_lease_seconds: int = Field(default=120, ge=1)
+    notification_batch_size: int = Field(default=100, ge=1, le=1000)
+    notification_interval_seconds: float = Field(default=10, gt=0)
+    tracking_token_secret: SecretStr = Field(default=SecretStr("local-tracking-token-secret-change-me"), min_length=8)
+    public_tracking_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
+    public_tracking_show_total: bool = False
 
     @field_validator("credentials_encryption_key")
     @classmethod
@@ -129,6 +146,19 @@ class Settings(BaseSettings):
             raise ValueError("CREDENTIALS_ENCRYPTION_KEY is required outside local/development/test")
         if not local and self.shipping_provider == "mock":
             raise ValueError("mock shipping is forbidden outside local/development/test")
+        if self.notifications_backend not in {"console", "smtp"}:
+            raise ValueError("Unknown notifications backend")
+        if not local and self.notifications_backend == "console" and not self.notifications_allow_console:
+            raise ValueError("Production notifications require smtp or explicit console opt-out")
+        if not self.smtp_host or any(c in self.smtp_from for c in "\r\n") or "@" not in self.smtp_from:
+            raise ValueError("Invalid SMTP host/from configuration")
+        if self.notification_lease_seconds <= self.smtp_timeout_seconds:
+            raise ValueError("Notification lease must exceed SMTP timeout")
+        if not local and (
+            self.tracking_token_secret.get_secret_value() == "local-tracking-token-secret-change-me"
+            or len(self.tracking_token_secret.get_secret_value()) < 32
+        ):
+            raise ValueError("TRACKING_TOKEN_SECRET must be a strong non-default secret outside local/development/test")
         return self
 
 

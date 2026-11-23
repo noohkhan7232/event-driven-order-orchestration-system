@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal, aware, get_principal
+from app.core.exceptions import AuthorizationError
 from app.db.session import get_db
+from app.models.entities import AuditLog
 from app.models.enums import OrderStatus
 from app.repositories.orders import OrderRepository
 from app.schemas.common import Page
@@ -13,6 +15,25 @@ from app.schemas.orders import OrderCreate, OrderRead
 from app.services.orders import OrderService
 
 router = APIRouter()
+
+
+@router.post("/{order_id}/tracking/rotate")
+def rotate_tracking(order_id: UUID, db: Session = Depends(get_db), user: Principal = Depends(get_principal)):
+    order = OrderService(db).get_order(order_id, user, for_update=True, scope="orders:write")
+    if user.is_customer:
+        raise AuthorizationError("Staff or integration credentials required")
+    order.tracking_version += 1
+    db.add(
+        AuditLog(
+            actor_id=user.user.id if user.user else None,
+            entity_type="order",
+            entity_id=order.id,
+            action="tracking_rotated",
+            payload={},
+        )
+    )
+    db.commit()
+    return {"tracking_token": order.tracking_token, "tracking_url": order.tracking_url}
 
 
 @router.post("", response_model=OrderRead, status_code=status.HTTP_202_ACCEPTED)
