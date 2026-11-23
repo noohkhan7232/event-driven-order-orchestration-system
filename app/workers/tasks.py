@@ -13,6 +13,7 @@ from app.domain.order_state import transition
 from app.events.contracts import DomainEvent, EventNames
 from app.models.entities import AuditLog, FailedJob, Inventory, Order, ProcessedEvent, Tenant
 from app.models.enums import JobStatus, OrderStatus, PaymentStatus
+from app.notifications.service import queue_notifications, run_notifications
 from app.observability.metrics import DUPLICATE_EVENTS
 from app.providers.contracts import ProviderDeclined
 from app.repositories.orders import OrderRepository
@@ -181,6 +182,7 @@ def process_event(self, raw_event: dict) -> None:
                     }[event.event_type]
                     step(db, order, event)
             fanout(db, order, event)
+            queue_notifications(db, order, event)
             db.commit()
         except UnmatchedPayment as exc:
             db.rollback()
@@ -303,3 +305,8 @@ def reconcile_pending_payments() -> dict[str, int]:
 @celery_app.task(name="app.workers.tasks.deliver_webhooks")
 def deliver_webhooks() -> dict[str, int]:
     return run_delivery_batch(SessionLocal, get_settings())
+
+
+@celery_app.task(name="app.workers.tasks.send_notifications")
+def send_notifications() -> dict[str, int]:
+    return run_notifications(SessionLocal, get_settings())

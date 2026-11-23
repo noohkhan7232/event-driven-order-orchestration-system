@@ -5,6 +5,7 @@ from app.api.v1.endpoints import (
     auth,
     health,
     inventory,
+    notification_settings,
     orders,
     payment_config,
     payment_webhooks,
@@ -29,3 +30,6 @@ api_router.include_router(admin.router, prefix="/admin/tenants", tags=["Platform
 api_router.include_router(payment_config.router, prefix="/settings/payments", tags=["Payment settings"])
 api_router.include_router(payment_webhooks.router, prefix="/webhooks/payments", tags=["Payment webhooks"])
 api_router.include_router(webhook_endpoints.router, prefix="/webhook-endpoints", tags=["Seller webhooks"])
+api_router.include_router(
+    notification_settings.router, prefix="/settings/notifications", tags=["Notification settings"]
+)

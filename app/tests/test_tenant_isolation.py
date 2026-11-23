@@ -173,6 +173,8 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("GET", "/api/v1/settings/notifications"),
+        ("PATCH", "/api/v1/settings/notifications"),
         ("POST", "/api/v1/webhook-endpoints"),
         ("GET", "/api/v1/webhook-endpoints"),
         ("PATCH", "/api/v1/webhook-endpoints/{endpoint_id}"),

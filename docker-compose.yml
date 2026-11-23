@@ -13,11 +13,28 @@ x-application: &application
   env_file: .env.example
   environment:
     FAILURE_INJECTION_ENABLED: ${FAILURE_INJECTION_ENABLED:-false}
+    NOTIFICATIONS_BACKEND: ${NOTIFICATIONS_BACKEND:-console}
   volumes:
     - .:/app
   depends_on: *ready
 
 services:
+  mailpit:
+    image: axllent/mailpit:latest
+    profiles: [dev-tools]
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
+
+  webhook-sink:
+    image: python:3.12-alpine
+    profiles: [dev-tools]
+    command: python /app/scripts/webhook_sink.py
+    volumes:
+      - ./scripts/webhook_sink.py:/app/scripts/webhook_sink.py:ro
+    ports:
+      - "127.0.0.1:${WEBHOOK_SINK_PORT:-8090}:8080"
+
   migrate:
     build: .
     command: alembic upgrade head

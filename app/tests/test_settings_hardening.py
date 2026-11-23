@@ -24,5 +24,6 @@ def test_production_accepts_strong_secret():
         secret_key="x" * 32,
         allow_mock_providers=True,
         shipping_provider="manual",
+        notifications_allow_console=True,
         credentials_encryption_key=Fernet.generate_key().decode(),
     )
