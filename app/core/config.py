@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     notification_lease_seconds: int = Field(default=120, ge=1)
     notification_batch_size: int = Field(default=100, ge=1, le=1000)
     notification_interval_seconds: float = Field(default=10, gt=0)
+    tracking_token_secret: SecretStr = Field(default=SecretStr("local-tracking-token-secret-change-me"), min_length=8)
+    public_tracking_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
+    public_tracking_show_total: bool = False
 
     @field_validator("credentials_encryption_key")
     @classmethod
@@ -151,6 +154,11 @@ class Settings(BaseSettings):
             raise ValueError("Invalid SMTP host/from configuration")
         if self.notification_lease_seconds <= self.smtp_timeout_seconds:
             raise ValueError("Notification lease must exceed SMTP timeout")
+        if not local and (
+            self.tracking_token_secret.get_secret_value() == "local-tracking-token-secret-change-me"
+            or len(self.tracking_token_secret.get_secret_value()) < 32
+        ):
+            raise ValueError("TRACKING_TOKEN_SECRET must be a strong non-default secret outside local/development/test")
         return self
 
 

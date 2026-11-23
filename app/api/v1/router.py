@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     payment_config,
     payment_webhooks,
     products,
+    public_tracking,
     shipments,
     tenancy,
     webhook_endpoints,
@@ -33,3 +34,4 @@ api_router.include_router(webhook_endpoints.router, prefix="/webhook-endpoints",
 api_router.include_router(
     notification_settings.router, prefix="/settings/notifications", tags=["Notification settings"]
 )
+api_router.include_router(public_tracking.router, prefix="/public/track", tags=["Public tracking"])

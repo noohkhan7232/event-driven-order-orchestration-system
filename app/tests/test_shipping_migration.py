@@ -4,11 +4,12 @@ from uuid import uuid4
 import pytest
 import sqlalchemy as sa
 from alembic.config import Config
+from legacy_orders import seed_legacy_order
 from sqlalchemy.orm import Session
 
 from alembic import command
 from app.core.config import get_settings
-from app.models.entities import DEFAULT_TENANT_ID, Order
+from app.models.entities import DEFAULT_TENANT_ID
 from app.models.enums import OrderStatus
 
 
@@ -28,14 +29,14 @@ def shipping_roundtrip(url, monkeypatch):
             autoload_with=engine,
         )
         with Session(engine) as db:
-            order = Order(
+            order = seed_legacy_order(
+                db,
                 tenant_id=DEFAULT_TENANT_ID,
                 principal_scope="tenant",
                 idempotency_key="shipping-legacy",
                 status=OrderStatus.FULFILLMENT_REQUESTED,
                 total_amount=59.97,
             )
-            db.add(order)
             db.flush()
             db.execute(
                 legacy.insert().values(

@@ -61,9 +61,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     try:
                         await run_in_threadpool(enforce, request, settings, policy, identities[policy.key_function])
                     except RateLimitError as exc:
+                        safe_headers = (
+                            {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+                            if policy.name == "tracking"
+                            else {}
+                        )
                         return JSONResponse(
                             status_code=exc.status_code,
-                            headers=exc.headers,
+                            headers={**exc.headers, **safe_headers},
                             content=ErrorResponse(code=exc.code, message=exc.message, details=exc.details).model_dump(),
                         )
             break

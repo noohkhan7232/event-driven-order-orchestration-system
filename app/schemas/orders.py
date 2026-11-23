@@ -66,6 +66,8 @@ class CheckoutRead(BaseModel):
 
 
 class OrderRead(BaseModel):
+    tracking_token: str
+    tracking_url: str
     payment_method: Literal["prepaid", "cod"]
     payment_status: str | None
     payment_expires_at: datetime | None
