@@ -174,6 +174,10 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("GET", "/api/v1/failed-jobs"),
+        ("GET", "/api/v1/failed-jobs/{job_id}"),
+        ("POST", "/api/v1/failed-jobs/{job_id}/replay"),
+        ("POST", "/api/v1/failed-jobs/{job_id}/discard"),
         ("GET", "/api/v1/orders/stream"),
         ("POST", "/api/v1/orders/{order_id}/tracking/rotate"),
         ("GET", "/api/v1/settings/notifications"),
@@ -214,6 +218,11 @@ def test_route_registry_has_no_unclassified_routes():
         ("DELETE", "/api/v1/api-keys/{key_id}"),
     }
     platform = {("GET", "/api/v1/system/metrics"), ("GET", "/api/v1/system/workers")}
+    platform |= {
+        ("GET", "/api/v1/admin/failed-jobs"),
+        ("POST", "/api/v1/admin/failed-jobs/{job_id}/replay"),
+        ("POST", "/api/v1/admin/failed-jobs/{job_id}/discard"),
+    }
     platform |= {
         ("GET", "/api/v1/admin/tenants"),
         ("GET", "/api/v1/admin/tenants/{tenant_id}"),
