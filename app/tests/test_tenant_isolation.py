@@ -157,7 +157,7 @@ def test_route_registry_has_no_unclassified_routes():
     from app.main import app
 
     public_webhook = {("POST", "/api/v1/webhooks/payments/{provider}/{webhook_public_id}")}
-    public_tracking = {("GET", "/api/v1/public/track/{token}")}
+    public_tracking = {("GET", "/api/v1/public/track/{token}"), ("GET", "/api/v1/public/track/{token}/stream")}
     public = {
         ("GET", "/docs"),
         ("HEAD", "/docs"),
@@ -174,6 +174,7 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("GET", "/api/v1/orders/stream"),
         ("POST", "/api/v1/orders/{order_id}/tracking/rotate"),
         ("GET", "/api/v1/settings/notifications"),
         ("PATCH", "/api/v1/settings/notifications"),
