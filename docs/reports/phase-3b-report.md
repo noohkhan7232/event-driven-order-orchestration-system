@@ -1,8 +1,8 @@
-# Phase 3B — implemented through live APIs and quality gates
+# Phase 3B — complete implementation and local verification
 
-23 November 2026, Asia/Calcutta. Branch: `phase-3b-integrations`.
-Tasks 3B.1–3B.12 are implemented locally. This session completes 3B.10–3B.12.
-Task 3B.13 (full-phase Docker acceptance) remains unselected and pending.
+24 November 2026, Asia/Calcutta. Branch: `phase-3b-integrations`.
+Tasks 3B.1–3B.13 and 3B.P1 are DONE. This session completes only 3B.13;
+previously reviewed implementations are retained. Live-service limits are in B13.
 This document describes the current system and final evidence only.
 
 # PART A — Architecture and operations
@@ -844,7 +844,9 @@ reconstructible legacy data and refuses operational journals/checkpoints or old-
 conflicts; never truncate hashes/IDs or delete money journals to force rollback.
 B14 gives test/reviewer commands. Acceptance preserves existing data volumes,
 uses unique proof rows and temporary Redis/overrides, reads restored defaults,
-and removes only its own cache/config. Its Razorpay HTTP case is a local session
+and removes its own cache/config and temporary encrypted webhook fixtures.
+Its temporary platform principal uses a random credential and is revoked on cleanup;
+audit identity and order/financial history remain. Its Razorpay HTTP case is a local session
 fixture with dummy credentials and no remote order/charge.
 
 Scoped Part 2 operations: select manual through owner PATCH /settings/shipping,
@@ -857,8 +859,8 @@ endpoint, then replay dead deliveries. Receiver idempotency must use the unchang
 event ID. Rotate signing secrets through the owner action and retain receiver-key
 overlap for in-flight calls. Rotate encrypted ciphertext with the existing Fernet
 ring before retiring old keys. Never edit a delivery payload/key to force success.
-Notifications, public tracking, SSE and HTTP recovery are implemented. Full
-Part2 Docker acceptance remains task3B.13 and was not selected.
+Notifications, public tracking, SSE and HTTP recovery are implemented and
+covered by the full local Docker acceptance runner documented in B6/B14.
 
 Notification operations: enable the dev-tools profile and opt into SMTP, or configure
 the real relay through private environment values. Inspect journal safe status/error;
@@ -885,7 +887,7 @@ omit tests and require90% overall and for each required new Part2 module.
 
 ## A14. Limitations
 
-Full-phase Docker acceptance, frontend and production deployment/HA/soak remain deferred.
+Frontend and production deployment/HA/soak remain deferred.
 Application ownership controls do not add PostgreSQL RLS. Global email uniqueness
 and the existing HTTP low-stock pagination cap remain unchanged. Local memory
 limiting and simulator lookup maps are process-local; use shared Redis for real
@@ -897,22 +899,24 @@ reconciliation. See the single current NOT VERIFIED list in B13.
 
 SSE gap recovery is bounded by its configured window; arbitrary long transactions
 need snapshot reconciliation. Synchronous slow DB reads can delay teardown. No
-current-tree full Docker, live provider or production guarantee is inferred.
+live provider or production guarantee follows from local Docker verification.
 
 # PART B — Current verification
 
 ## B1. Summary
 
-Read report/history at clean c77c2d5 on phase-3b-integrations before changes.
-Baseline:532 passed,40 skipped,369.39s; reviewed3B.1–3B.9 were not redone.
-Selected3B.10,3B.11 and3B.12 are DONE in separate green commits; none skipped.
-SSE scopes, resume, gap buffering, caps, deadlines and cancellation are tested.
-Owner/platform HTTP recovery preserves3A locking/audits and masks private data.
-OpenAPI export/freshness,90% coverage gates, route/privacy checks and README are current.
-README Python/Node signatures, synthetic fetch parsing and private Compose config pass.
-Final SQLite/PG+Redis results and per-module coverage follow in B4.
-Full current-tree Docker acceptance remains unselected3B.13; no live-money claim.
-Hosted CI/production remain unverified. No push, merge or deployment command ran.
+All Phase3B tasks3B.1–3B.13 and3B.P1 are DONE; none are skipped.
+Session starts at clean bf02c7c on phase-3b-integrations; earlier tasks are retained.
+Baseline before changes:559 passed,43 skipped in271.91s.
+Task3B.13 extends the real Docker runner; no product feature is added.
+All29 specified E-cases pass, plus retained S5/S6/S10 and payment controls.
+Real Mailpit/sink/HTTP streams and broker-backed replay run against PostgreSQL.
+Legacy0007→0021→0007→0021 preserves fixture data and native enum labels.
+Ruff/format/mypy/OpenAPI and both full coverage suites pass; B4 has actual results.
+Runtime defaults are verified on api/worker/scheduler; application volumes remain.
+Source/evidence commit:a9abc48; report is finalized in its own commit.
+Live Razorpay, external SMTP/TLS, hosted CI and production remain NOT VERIFIED.
+No push, merge or deployment is performed; B13 records precise residual limits.
 
 ## B2. Task status
 
@@ -937,7 +941,7 @@ Hosted CI/production remain unverified. No push, merge or deployment command ran
 |3B.10| Scoped SSE |DONE |79de3db |Resume/gaps/caps/disconnect; blocked-send guard in12 |
 |3B.11| Failed-jobs HTTP |DONE |e5ee852 |Owner/platform privacy, PG replay race |
 |3B.12| Quality/OpenAPI/README |DONE |ce87002 |Fresh export; coverage gates; current docs |
-|3B.13| Full-phase Docker proof |NOT SELECTED |— |Prior Part1 proof retained; current full run unverified |
+|3B.13| Full-phase Docker and legacy proof |DONE |a9abc48 |All specified29 E-cases; full suites; restored defaults; report-only commit follows |
 
 ## B3. TDD evidence
 
@@ -962,6 +966,8 @@ outputs remain in reviewed commits; B4 is the final current-tree result.
 |3B.10 SSE|6 failed4.28s; history/backlog/header regressions|PG13 passed17.61s; task commit543 passed/42 skipped490.81s|
 |3B.11 HTTP recovery|7 failed/1 skipped5.68s|PG9 passed14.41s; task commit551 passed/43 skipped402.01s; new modules100%|
 |3B.12 export/env/privacy|4 failed/2 controls7.26s; FastAPI status inference error|24 passed/2 skipped32.83s; fresh export; explicit200|
+|3B.13 runner/signature control|1 failed/1 control1.28s: missing seller runner module|2 passed1.09s; tampered signature rejected; real Docker scenarios in B6|
+|3B.13 platform fixture cleanup|1 failed2.94s: temporary admin remains active|3 passed2.76s; only owned principal retired; real PG/Docker rerun in B6|
 |Blocked client send|1 failed4.43s: deadline exceeded|19 passed/2 skipped32.62s; fresh PG21 passed32.05s; SSE/API100%|
 
 Poison payload409, coverage90/89.99/missing evidence, Windows paths, revocation,
@@ -969,18 +975,27 @@ README Python/Node/fetch/private-Compose and historical seed checks are positive
 controls. Valid platform fixtures are tenant-less at insertion. Functional stream
 tests permit300ms for covered DB reads; blocked-send proof still requires30ms.
 
+New Docker scenarios are executable acceptance assertions; no existing assertion
+was relaxed. Initial setup failed on Windows-blocked host SMTP port1025; the
+supported MAILPIT_SMTP_PORT=11025 override fixes infrastructure without changing
+container SMTP port1025 or acceptance expectations. B12 records any later findings.
+
 ## B4. Final quality gates and production coverage
 
 ```text
 All checks passed!
-209 files already formatted
+210 files already formatted
 Success: no issues found in 169 source files
 OpenAPI export is fresh
-SQLite: 559 passed, 43 skipped in 675.89s (0:11:15)
-PostgreSQL + Redis: 601 passed, 1 skipped in 1039.54s (0:17:19)
+SQLite: 561 passed, 43 skipped in 725.72s (0:12:05)
+PostgreSQL + Redis: 603 passed, 1 skipped in 1487.34s (0:24:47)
 Production coverage gate: PASS overall >=90%; all17 required Part2 modules >=90% in both runs
 ```
 
+The sole PostgreSQL skip is test_razorpay_test_mode_session: its explicit guard
+requires RAZORPAY_TEST_KEY_ID and RAZORPAY_TEST_KEY_SECRET, which are absent.
+SQLite also skips42 PostgreSQL/Redis-only checks; those run in the PG layer.
+The focused runner controls are3 passed in2.76s after the cleanup regression.
 Tests are omitted by pyproject coverage configuration. Every nonempty new
 Phase3B production module plus shipping service/API also exceeds90% below. CI has
 SQLite and PostgreSQL+Redis jobs with these gates; hosted execution is unverified.
@@ -1033,7 +1048,7 @@ encrypted tenant credentials, payment sessions, receipt/refund/claim journals,
 tenant-scoped receipt uniqueness, expiry index and polling checkpoints.0018 adds
 shipping metadata without narrowing80/120-character legacy fields;0019 adds
 seller webhook journals;0020 notifications;0021 tracking version. Native enum
-labels remain unchanged. Tasks3B.10–3B.12 add no schema changes.
+labels remain unchanged. Tasks3B.10–3B.13 add no schema changes.
 
 The0007 fixture preserves a paid order, authorized payment,3×19.99 item/59.97 total,
 stock7/3, warehouse/product/user, legacy prefix/hash and IDs through head→0007→head.
@@ -1042,8 +1057,10 @@ state refuse destructive downgrade. Receipt downgrade refuses old-key conflicts;
 ciphertext/history guards remain. These sample roundtrips are not arbitrary
 production repair/rollback. Reflected historical seeds keep every original check.
 
-Retained standalone SQLite+PG legacy proof (7 passed31.32s), also included in the
-current full PG suite; repeated markers are condensed:
+Fresh standalone PostgreSQL0007→head→0007→head check:1 passed in7.21s.
+The complete raw Alembic output is [legacy migration output](phase-3b-legacy-migration.txt).
+The current full suites also retain the shipping/webhook/notification/tracking
+roundtrips and all downgrade refusal checks. Key raw proof outputs:
 
 ```text
 0007->HEAD->0007->HEAD: LEGACY ORDER/PAYMENT/ITEM/INVENTORY/PREFIX/HASH AND NATIVE ENUM LABELS PRESERVED
@@ -1055,17 +1072,17 @@ TRACKING LEGACY ROUNDTRIP PASS; ROTATED VERSION DOWNGRADE REFUSED; MONEY/REVOCAT
 ```
 
 The reviewed Part1 operational upgrade was0014→0017 with writers stopped and
-volumes preserved. No current operational0021 deployment is claimed; this session
-performs no application-database migration.
+volumes preserved. The real application stack is already at0021_public_tracking before experiments;
+Compose's migration service exits0 on recreation. The standalone legacy roundtrip
+uses disposable orders_test/schema fixtures, never downgrades application data.
 
-## B6. Docker evidence and scope
+## B6. Full Docker end-to-end evidence
 
-The retained experiment lines below are the reviewed Part1 run; dev-tools lines
-are the3B.8 local profile smoke. They are not current-tree full Docker acceptance.
-E15 uses a local session fixture through the real signed HTTP/broker/worker pipeline,
-not a remote Razorpay session/money call. E16 uses actual beat expiry; E20 pauses
-the shipment consumer and verifies three refund attempts, one financial effect and
-stock release. E28 isolates Redis quotas; E30 conserves stock under adjustments.
+The real Compose stack below runs all29 specified cases: E1–E20 and E22–E30.
+E21 is absent from the prompt. Complete output is preserved in
+[Docker acceptance transcript](phase-3b-docker-e2e.txt); repeated inventories and
+identical runtime JSONs are condensed here. All three services' defaults are
+asserted; the inline runtime example is api. E15 uses a synthetic provider session.
 
 ```text
 ISOLATED Redis HTTP quotas; normal quota counters and all data volumes preserved
@@ -1096,44 +1113,57 @@ PASS E15 HTTP fixture: raw HMAC accepted once, duplicate=200, bad/missing=401, o
 PASS E16: actual beat expiry after window+grace, stock restored; signed late capture twice, one succeeded refund, no fulfillment
 PASS E28: login email/IP and registration quotas, forged XFF ignored, independent API keys, strict429/Retry-After headers
 PASS E30:30 orders+15 adjustments, accepted_delta=5, fulfilled=25, stock conserved and audits exact
+PASS E19: manual metadata/events; stale/duplicate harmless; one DELIVERED and one COD collection/audit
+PASS E22: four logical lifecycle events; every received signature independently verified; delivered logs, no buyer PII
+PASS E23: 503/503/204; exhaustion dead after3; replay same event ID/replay_count1; one success each
+PASS E24: 14 real API rejections: localhost, metadata/private/CGNAT, IPv6/mapped, encoded IPs and non-HTTPS
+PASS E25: Mailpit exactly1 per trigger across6 templates; graceful worker restart mid-order and repeat polls no resend; opt-out0
+PASS E26: safe public JSON/headers; rotate invalidates old link; configured3-request quota returns429/Retry-After
+PASS E27: real HTTP live sequence; disconnect/reconnect Last-Event-ID exact timeline; friendly public stream; foreign0
+PASS E29: real exhausted retries; owner/foreign/platform HTTP; replay once, exact attempts/shipment/stock; discard+actor audits
 PASS session subset: pending checkout, durable attempt, cancellation and stock release
 PASS E18: COD fulfillment without session; cancellation releases stock and shipment
-PASS selected Part 1 acceptance section: all
-PASS dev-tools: Mailpit UI and local SMTP accepted one synthetic message
-PASS dev-tools: sink recorded three requests, failed twice then accepted, invalid config/body cap rejected
+PASS selected Phase 3B acceptance section: all
+RESTORED api {"auto_complete": true, "refund_failures": 0, "window": 1800, "grace": 120, "expiry_interval": 30.0, "reconcile_after": 60, "reconcile_interval": 60.0, "failure_injection": false, "shared_rate_backend": true, "rate_backend_is_default": true, "encryption_configured": false, "notifications_backend": "console", "webhook_insecure": false, "webhook_attempts": 8, "webhook_interval": 10.0, "notification_interval": 10.0, "stream_max": 300.0, "stream_poll": 1.0, "stream_lookback": 5.0, "tracking_limit": 60}
 ```
 
-Condensed restored values shared by api/worker/scheduler at that reviewed run:
-```json
-{"auto_complete":true,"refund_failures":0,"window":1800,"grace":120,"expiry_interval":30.0,"reconcile_after":60,"reconcile_interval":60.0,"failure_injection":false,"shared_rate_backend":true,"rate_backend_is_default":true,"encryption_configured":false}
-```
-
-That run's operational head was0017_payment_polling, worker ping reported1 node,
-all seven long-running services were Up and migrate exited0. It preserved volumes
-and removed its own temporary quota container/config. Its original full output is
-retained in commitc77c2d5; repeated container names/age/port columns are condensed.
-The earlier Mailpit/sink smoke used loopback18025/11025/18090, accepted one synthetic
-email and failed two sink requests before success; both smoke services were stopped.
-
-This session's PostgreSQL/Redis services were already running on5432/6379 and are
-left running. Only orders_test and Redis DB15 are used for test-layer verification.
-No service start/stop/recreate, operational migration or deployment command runs.
-README private Compose configuration is validated read-only with synthetic values.
-Current full E1–E30, including E27/E29, remains NOT VERIFIED; task3B.13 is unselected.
-
-Current read-only docker compose ps inventory (service/state/status columns):
+The complete run precedes the runner's platform-fixture cleanup fix. Business
+assertions are unchanged; the [focused E29 rerun](phase-3b-cleanup-e29.txt) verifies
+random credentials, committed retirement and restored defaults. Both refreshed
+full suites include its new regression. Additional raw proof:
 
 ```text
-api: running; Up About an hour
-mailpit: exited; Exited (0) 27 hours ago
-migrate: exited; Exited (0) About an hour ago
-outbox-relay: running; Up About an hour
-postgres: running; Up About an hour (healthy)
-rabbitmq: running; Up About an hour (healthy)
-redis: running; Up About an hour
-scheduler: running; Up About an hour
-webhook-sink: exited; Exited (137) 27 hours ago
-worker: running; Up About an hour
+PASS fixture cleanup: both earlier owned platform principals disabled; all unrelated principals unchanged
+PASS E29: real exhausted retries; owner/foreign/platform HTTP; replay once, exact attempts/shipment/stock; discard+actor audits
+PASS platform fixture cleanup: temporary principal disabled
+PASS selected Phase 3B acceptance section: sellers
+owned_platform_fixtures | active
+-------------------------+--------
+                       4 |      0
+(1 row)
+```
+
+Unique order, money and audit fixtures plus existing volumes remain. Only owned
+temporary encrypted webhook rows/cache/config are removed; platform proof accounts
+are disabled. Normal Redis quota windows are untouched. SMTP host11025 avoids the
+Windows-blocked1025 binding; internal mailpit:1025 stays unchanged. Mailpit/sink
+remain on loopback8025/8090. E22 verifies source sequence, not transport ordering;
+E25 restarts gracefully between stages, not during uncertain SMTP acceptance.
+
+Final raw service/state/status inventory:
+
+```text
+SERVICE        STATE     STATUS
+api            running   Up About a minute
+mailpit        running   Up 58 minutes (healthy)
+migrate        exited    Exited (0) About a minute ago
+outbox-relay   running   Up 35 minutes
+postgres       running   Up 2 hours (healthy)
+rabbitmq       running   Up 43 minutes (healthy)
+redis          running   Up 2 hours
+scheduler      running   Up 2 minutes
+webhook-sink   running   Up About an hour
+worker         running   Up 2 minutes
 ```
 
 ## B7. Concurrency, lock and isolation proofs
@@ -1142,8 +1172,10 @@ The final PG suite covers both expiry/capture winners, two schedulers, polling v
 raw webhook dedupe, stock conservation, financial exactly-once effects and
 cross-tenant ownership. Provider/refund/HTTP/SMTP probes use independent NOWAIT
 sessions during blocked calls and peer SKIP LOCKED claims. HTTP transport/SMTP are
-mocked deliberately; no live TLS/egress guarantee follows. Identical output lines
-are deduplicated below; current SSE/recovery/README proof lines are included.
+mocked deliberately; no live TLS/egress guarantee follows. Retained focused PG
+markers below identify assertions passing again in the current full PG suite.
+README markers come from separate fresh synthetic checks after this session's
+documentation update. Local Docker transport proofs are recorded in B6.
 
 ```text
 EXPIRY/CAPTURE WINNER=CAPTURE; ONE TRANSITION; STOCK CONSERVED; NO DOUBLE REFUND
@@ -1171,7 +1203,9 @@ all public routes declare quotas. A nine-new-route sweep excludes buyer fields,
 key/token material, payloads and raw diagnostics. ASGI tests prove closed poll
 sessions, actual disconnect, rotation, lease release and blocked-send deadline.
 README proofs use synthetic signatures, a mocked fetch and read-only Compose;
-they do not send money/email or run full Docker acceptance.
+they do not send money/email. Separately, B6 exercises real local SMTP, sink HTTP,
+stream reconnect/isolation and broker-backed failed-job replay. Docker tests do not
+replace independent PostgreSQL NOWAIT/SKIP LOCKED proofs in the full test suite.
 
 ## B8. Razorpay verification ledger
 
@@ -1217,181 +1251,187 @@ order.paid and refund.processed/failed. API endpoint rows above retain their
 |Shipping lifecycle / seller webhooks |Resolved in3B.6/3B.7; current proofs above |
 |Notifications/public tracking |DONE; durable SMTP journal and revocable public links |
 |SSE/failed-jobs HTTP |DONE; scoped streams and owner/platform recovery |
-|RLS/global email uniqueness/HA/monitoring/deployment |Existing limitations, outside Part 1 |
+|RLS/global email uniqueness/HA/monitoring/deployment |Existing limitations, outside Phase3B |
 
 ## B10. Changed files and commits
 
-Full delivery tree against main, including this report (width56/name40/graph3;
-spacing condensed, no file-count truncation):
+Current complete Phase3B diff against main (every file; width flags do not limit count):
 
 ```text
-.dockerignore | 1 +
-.env.example | 76 +-
-.github/workflows/ci.yml | 13 +-
-.gitignore | 1 +
-README.md | 693 +-
-alembic/versions/0008_api_key_prefix.py | 25 +
-alembic/versions/0009_order_timeline.py | 42 +
-alembic/versions/0010_payment_config.py | 36 +
-.../versions/0011_payment_sessions.py | 37 +
-.../versions/0012_inbound_webhooks.py | 31 +
-alembic/versions/0013_refunds.py | 39 +
-alembic/versions/0014_refund_claims.py | 34 +
-alembic/versions/0015_tenant_receipts.py | 29 +
-.../0016_payment_expiry_index.py | 16 +
-.../0017_payment_reconciliation.py | 31 +
-alembic/versions/0018_manual_shipping.py | 35 +
-.../versions/0019_outbound_webhooks.py | 69 +
-alembic/versions/0020_notifications.py | 45 +
-alembic/versions/0021_public_tracking.py | 21 +
-app/api/v1/endpoints/failed_jobs.py | 108 +
-app/api/v1/endpoints/health.py | 7 +-
-app/api/v1/endpoints/inventory.py | 72 +-
-.../endpoints/notification_settings.py | 45 +
-app/api/v1/endpoints/orders.py | 21 +
-app/api/v1/endpoints/payment_config.py | 41 +
-app/api/v1/endpoints/payment_webhooks.py | 41 +
-app/api/v1/endpoints/public_tracking.py | 16 +
-app/api/v1/endpoints/shipments.py | 104 +-
-app/api/v1/endpoints/streams.py | 72 +
-app/api/v1/endpoints/tenancy.py | 5 +-
-.../v1/endpoints/webhook_endpoints.py | 200 +
-app/api/v1/router.py | 30 +-
-app/auth/principal.py | 34 +-
-app/core/config.py | 124 +-
-app/core/crypto.py | 44 +
-app/core/exceptions.py | 8 +
-app/core/logging.py | 23 +
-app/core/ratelimit.py | 316 +
-app/core/ssrf.py | 70 +
-app/domain/order_state.py | 18 +-
-app/domain/timeline.py | 61 +
-app/events/contracts.py | 2 +
-app/events/publisher.py | 5 +-
-app/main.py | 15 +-
-app/middleware/rate_limit.py | 82 +
-app/middleware/request_context.py | 4 +-
-app/models/__init__.py | 2 +
-app/models/entities.py | 207 +-
-app/notifications/__init__.py | 1 +
-app/notifications/channels.py | 102 +
-app/notifications/service.py | 186 +
-app/providers/contracts.py | 77 +
-app/providers/manual.py | 17 +
-app/providers/mock_v2.py | 118 +
-app/providers/razorpay.py | 201 +
-app/providers/registry.py | 10 +-
-app/providers/resolution.py | 54 +
-app/repositories/base.py | 10 -
-app/repositories/inventory.py | 10 -
-app/schemas/failed_jobs.py | 52 +
-app/schemas/inventory.py | 12 +
-app/schemas/orders.py | 20 +
-app/schemas/payment_config.py | 19 +
-app/schemas/shipments.py | 37 +-
-app/schemas/tenancy.py | 3 +-
-app/schemas/webhooks.py | 84 +
-app/services/auth.py | 7 +-
-app/services/failed_jobs.py | 12 +-
-app/services/inbound_payments.py | 118 +
-app/services/inventory.py | 14 +-
-app/services/orders.py | 9 +
-app/services/outbound_webhooks.py | 121 +
-app/services/payment_config.py | 64 +
-app/services/payment_events.py | 42 +
-app/services/payment_expiry.py | 59 +
-app/services/payment_reconciliation.py | 303 +
-app/services/payment_sessions.py | 155 +
-app/services/payment_timing.py | 21 +
-app/services/payments.py | 17 +-
-app/services/provider_events.py | 181 +
-app/services/refund_intents.py | 74 +
-app/services/refunds.py | 232 +
-app/services/shipping.py | 101 +-
-app/services/sse.py | 270 +
-app/services/tenancy.py | 24 +-
-app/services/tracking.py | 116 +
-app/services/webhook_delivery.py | 208 +
-app/tests/conftest.py | 24 +-
-app/tests/legacy_orders.py | 23 +
-app/tests/test_cancel_hardening.py | 7 +
-app/tests/test_consumers.py | 39 +-
-app/tests/test_failed_jobs_api.py | 249 +
-app/tests/test_failure_scenarios.py | 20 +-
-app/tests/test_inbound_migration.py | 57 +
-app/tests/test_inbound_payments.py | 195 +
-app/tests/test_integration_carryover.py | 35 +
-app/tests/test_inventory_atomic.py | 21 +-
-app/tests/test_mock_v2.py | 102 +
-app/tests/test_notification_channels.py | 100 +
-app/tests/test_notification_migration.py | 78 +
-app/tests/test_notification_postgres.py | 62 +
-app/tests/test_notifications.py | 158 +
-app/tests/test_order_recovery.py | 9 +-
-app/tests/test_order_state.py | 12 +-
-app/tests/test_order_timeline.py | 136 +
-.../test_outbound_webhook_migration.py | 80 +
-app/tests/test_outbound_webhooks.py | 218 +
-app/tests/test_part1_verification.py | 254 +
-app/tests/test_payment_config.py | 160 +
-.../test_payment_config_migration.py | 74 +
-app/tests/test_payment_expiry.py | 185 +
-app/tests/test_payment_reconciliation.py | 343 +
-app/tests/test_payment_reviews.py | 159 +
-...test_payment_scheduler_concurrency.py | 287 +
-app/tests/test_payment_sessions.py | 253 +
-.../test_payment_sessions_migration.py | 78 +
-app/tests/test_phase3b_quality.py | 184 +
-app/tests/test_postgres_reliability.py | 84 +-
-app/tests/test_prefix_migration.py | 81 +
-app/tests/test_principal_auth.py | 2 +-
-app/tests/test_provider_events.py | 307 +
-app/tests/test_provider_inputs.py | 17 +
-app/tests/test_providers.py | 31 +-
-app/tests/test_public_tracking.py | 200 +
-app/tests/test_ratelimit.py | 356 +
-app/tests/test_razorpay.py | 189 +
-.../test_receipt_tenant_uniqueness.py | 108 +
-.../test_reconciliation_migration.py | 77 +
-app/tests/test_refund_claim_migration.py | 112 +
-app/tests/test_refund_migration.py | 91 +
-app/tests/test_refund_worker.py | 462 +
-app/tests/test_reliability_edges.py | 4 +-
-app/tests/test_remaining_carryover.py | 133 +
-app/tests/test_settings_hardening.py | 12 +-
-app/tests/test_shipping_lifecycle.py | 214 +
-app/tests/test_shipping_migration.py | 94 +
-app/tests/test_sse.py | 406 +
-app/tests/test_ssrf.py | 129 +
-app/tests/test_tenancy_migration.py | 9 +-
-app/tests/test_tenant_isolation.py | 79 +-
-app/tests/test_timeline_migration.py | 105 +
-app/tests/test_tracking_logging.py | 22 +
-app/tests/test_tracking_migration.py | 68 +
-app/tests/test_webhook_delivery.py | 177 +
-.../test_webhook_delivery_postgres.py | 86 +
-app/workers/celery_app.py | 21 +
-app/workers/tasks.py | 158 +-
-docker-compose.yml | 17 +
-docs/openapi.json | 6595 +++
-docs/reports/phase-3b-report.md | 1568 +
-pytest.ini | 1 +
-requirements.txt | 1 +
-scripts/check_coverage.py | 50 +
-scripts/e2e_abuse_inventory.py | 236 +
-scripts/e2e_integrations.py | 225 +
-scripts/e2e_payments.py | 522 +
-scripts/e2e_reliability.py | 114 +-
-scripts/e2e_tenancy.py | 4 +-
-scripts/export_openapi.py | 38 +
-scripts/verify_rate_timeline.py | 155 +
-scripts/webhook_sink.py | 70 +
-161 files changed, 22773 insertions(+), 471 deletions(-)
+.dockerignore              |    1 +
+ .env.example               |   76 +-
+ .github/workflows/ci.yml   |   13 +-
+ .gitignore                 |    1 +
+ README.md                  |  706 +-
+ .../0008_api_key_prefix.py |   25 +
+ .../0009_order_timeline.py |   42 +
+ .../0010_payment_config.py |   36 +
+ ...011_payment_sessions.py |   37 +
+ ...012_inbound_webhooks.py |   31 +
+ .../0013_refunds.py        |   39 +
+ .../0014_refund_claims.py  |   34 +
+ ...0015_tenant_receipts.py |   29 +
+ ...payment_expiry_index.py |   16 +
+ ...yment_reconciliation.py |   31 +
+ ...0018_manual_shipping.py |   35 +
+ ...19_outbound_webhooks.py |   69 +
+ .../0020_notifications.py  |   45 +
+ ...0021_public_tracking.py |   21 +
+ .../failed_jobs.py         |  108 +
+ .../v1/endpoints/health.py |    7 +-
+ .../endpoints/inventory.py |   72 +-
+ ...otification_settings.py |   45 +
+ .../v1/endpoints/orders.py |   21 +
+ .../payment_config.py      |   41 +
+ .../payment_webhooks.py    |   41 +
+ .../public_tracking.py     |   16 +
+ .../endpoints/shipments.py |  104 +-
+ .../endpoints/streams.py   |   72 +
+ .../endpoints/tenancy.py   |    5 +-
+ .../webhook_endpoints.py   |  200 +
+ app/api/v1/router.py       |   30 +-
+ app/auth/principal.py      |   34 +-
+ app/core/config.py         |  124 +-
+ app/core/crypto.py         |   44 +
+ app/core/exceptions.py     |    8 +
+ app/core/logging.py        |   23 +
+ app/core/ratelimit.py      |  316 +
+ app/core/ssrf.py           |   70 +
+ app/domain/order_state.py  |   18 +-
+ app/domain/timeline.py     |   61 +
+ app/events/contracts.py    |    2 +
+ app/events/publisher.py    |    5 +-
+ app/main.py                |   15 +-
+ .../rate_limit.py          |   82 +
+ .../request_context.py     |    4 +-
+ app/models/__init__.py     |    2 +
+ app/models/entities.py     |  207 +-
+ .../__init__.py            |    1 +
+ .../channels.py            |  102 +
+ .../service.py             |  186 +
+ app/providers/contracts.py |   77 +
+ app/providers/manual.py    |   17 +
+ app/providers/mock_v2.py   |  118 +
+ app/providers/razorpay.py  |  201 +
+ app/providers/registry.py  |   10 +-
+ .../resolution.py          |   54 +
+ app/repositories/base.py   |   10 -
+ .../inventory.py           |   10 -
+ app/schemas/failed_jobs.py |   52 +
+ app/schemas/inventory.py   |   12 +
+ app/schemas/orders.py      |   20 +
+ .../payment_config.py      |   19 +
+ app/schemas/shipments.py   |   37 +-
+ app/schemas/tenancy.py     |    3 +-
+ app/schemas/webhooks.py    |   84 +
+ app/services/auth.py       |    7 +-
+ .../failed_jobs.py         |   12 +-
+ .../inbound_payments.py    |  118 +
+ app/services/inventory.py  |   14 +-
+ app/services/orders.py     |    9 +
+ .../outbound_webhooks.py   |  121 +
+ .../payment_config.py      |   64 +
+ .../payment_events.py      |   42 +
+ .../payment_expiry.py      |   59 +
+ ...yment_reconciliation.py |  303 +
+ .../payment_sessions.py    |  155 +
+ .../payment_timing.py      |   21 +
+ app/services/payments.py   |   17 +-
+ .../provider_events.py     |  181 +
+ .../refund_intents.py      |   74 +
+ app/services/refunds.py    |  232 +
+ app/services/shipping.py   |  101 +-
+ app/services/sse.py        |  270 +
+ app/services/tenancy.py    |   24 +-
+ app/services/tracking.py   |  116 +
+ .../webhook_delivery.py    |  208 +
+ app/tests/conftest.py      |   24 +-
+ app/tests/legacy_orders.py |   23 +
+ ...est_cancel_hardening.py |    7 +
+ .../test_consumers.py      |   39 +-
+ .../test_e2e_runner.py     |   69 +
+ ...test_failed_jobs_api.py |  249 +
+ ...st_failure_scenarios.py |   20 +-
+ ...st_inbound_migration.py |   57 +
+ ...est_inbound_payments.py |  195 +
+ ...ntegration_carryover.py |   35 +
+ ...est_inventory_atomic.py |   21 +-
+ app/tests/test_mock_v2.py  |  102 +
+ ...otification_channels.py |  100 +
+ ...tification_migration.py |   78 +
+ ...otification_postgres.py |   62 +
+ .../test_notifications.py  |  158 +
+ .../test_order_recovery.py |    9 +-
+ .../test_order_state.py    |   12 +-
+ .../test_order_timeline.py |  136 +
+ ...nd_webhook_migration.py |   80 +
+ ...st_outbound_webhooks.py |  218 +
+ ...t_part1_verification.py |  254 +
+ .../test_payment_config.py |  160 +
+ ...ent_config_migration.py |   74 +
+ .../test_payment_expiry.py |  185 +
+ ...yment_reconciliation.py |  343 +
+ ...test_payment_reviews.py |  159 +
+ ...cheduler_concurrency.py |  287 +
+ ...est_payment_sessions.py |  253 +
+ ...t_sessions_migration.py |   78 +
+ ...test_phase3b_quality.py |  184 +
+ ...postgres_reliability.py |   84 +-
+ ...est_prefix_migration.py |   81 +
+ .../test_principal_auth.py |    2 +-
+ ...test_provider_events.py |  307 +
+ ...test_provider_inputs.py |   17 +
+ .../test_providers.py      |   31 +-
+ ...test_public_tracking.py |  200 +
+ .../test_ratelimit.py      |  356 +
+ app/tests/test_razorpay.py |  189 +
+ ...pt_tenant_uniqueness.py |  108 +
+ ...nciliation_migration.py |   77 +
+ ...fund_claim_migration.py |  112 +
+ ...est_refund_migration.py |   91 +
+ .../test_refund_worker.py  |  462 +
+ ...st_reliability_edges.py |    4 +-
+ ..._remaining_carryover.py |  133 +
+ ...t_settings_hardening.py |   12 +-
+ ...t_shipping_lifecycle.py |  214 +
+ ...t_shipping_migration.py |   94 +
+ app/tests/test_sse.py      |  406 +
+ app/tests/test_ssrf.py     |  129 +
+ ...st_tenancy_migration.py |    9 +-
+ ...est_tenant_isolation.py |   79 +-
+ ...t_timeline_migration.py |  105 +
+ ...est_tracking_logging.py |   22 +
+ ...t_tracking_migration.py |   68 +
+ ...est_webhook_delivery.py |  177 +
+ ...ok_delivery_postgres.py |   86 +
+ app/workers/celery_app.py  |   21 +
+ app/workers/tasks.py       |  158 +-
+ docker-compose.yml         |   17 +
+ docs/openapi.json          | 6595 +
+ ...hase-3b-cleanup-e29.txt |   18 +
+ ...phase-3b-docker-e2e.txt |   79 +
+ ...3b-legacy-migration.txt |   68 +
+ .../phase-3b-report.md     | 1632 +
+ pytest.ini                 |    1 +
+ requirements.txt           |    1 +
+ scripts/check_coverage.py  |   50 +
+ .../e2e_abuse_inventory.py |  236 +
+ .../e2e_integrations.py    |  253 +
+ scripts/e2e_payments.py    |  522 +
+ scripts/e2e_reliability.py |  114 +-
+ ..._seller_integrations.py |  741 +
+ scripts/e2e_tenancy.py     |    4 +-
+ scripts/export_openapi.py  |   38 +
+ ...verify_rate_timeline.py |  155 +
+ scripts/webhook_sink.py    |   70 +
+ 166 files changed, 23858 insertions(+), 466 deletions(-)
 ```
 
-Implementation log before this report-only commit:
+Commits before the final report-only commit:
 
 ```text
+a9abc48 test(e2e): verify complete phase 3b Docker workflows
+bf02c7c docs: finalize phase 3b documentation and verification report
 ce87002 chore(quality): enforce coverage and refresh API documentation
 e5ee852 feat(recovery): expose private owner and platform failed-job APIs
 79de3db feat(sse): stream scoped order timelines with bounded leases
@@ -1429,7 +1469,8 @@ fbc43ce docs: add phase 3b part 1 report
 6eb6b04 fix(security): harden login verification and duplicate inventory errors
 ```
 
-No push, PR, merge or deployment command is performed.
+The final report-only commit changes only this document. Its own hash cannot be
+embedded without changing that hash; the log above ends at the source/evidence commit.
 
 ## B11. Deviations and every modified existing test
 
@@ -1488,33 +1529,47 @@ this can leave missed delivery. Failed-job HTTP deliberately replaces arbitrary
 error text/unknown labels with safe generic values, rather than heuristic PII
 redaction. Original diagnostics remain private in the database.
 
+Task3B.13 changes no existing test function. It adds two tests to
+app/tests/test_e2e_runner.py:
+
+- test_seller_acceptance_inventory_and_independent_signature_check: complete case
+  catalog, independent valid signature and tamper rejection.
+- test_seller_cleanup_disables_only_its_temporary_platform_principal: owned admin
+  becomes inactive; an unrelated platform principal remains active.
+
+AST comparison against main finds18 modified preexisting Phase3B test functions;
+all remain named above. The entrypoint retains every earlier E/S assertion and
+adds seller cases/restored defaults. E22 uses source timestamps and the complete
+event set; transport arrival order is unspecified. Populated buyer fields and a
+second tenant strengthen privacy/platform checks. Host11025 uses supported
+configuration; no acceptance assertion is weakened.
+
 ## B12. Newly discovered issues
 
-Resolved existing integration findings remain covered: stale shipment responses,
-cancellation vs queued delivery, historical ORM seeds, alias event collisions and
-DNS validation/connect rebinding. SMTP classification/QUIT handling and tracking
-log redaction remain verified; logger fixtures isolate Alembic's disabled state.
+Resolved integration findings retain coverage: stale shipment responses,
+cancellation vs queued delivery, historical ORM seeds, alias event collisions,
+DNS rebinding, SMTP classification/QUIT handling and tracking-log redaction.
+Alembic logger fixtures isolate disabled state. SSE fixes cover backlog overtaking,
+oversized initial lookback, missing public422/503 privacy headers and blocked sends;
+the response deadline bounds transport finalization and shields lease release.
+FastAPI0.115.6 needs explicit200 for the custom response. Reserved SSE docs are
+deduplicated; CI rejects missing/below90% modules. Platform fixtures are tenant-less;
+PG functional reads allow300ms while the independent deadline remains30ms.
+Git statistics now include every file without a count limit.
 
-This scope fixes SSE backlog overtaking, oversized initial lookback, missing public
-422/503 privacy headers, and a generator-only timeout that missed blocked sends.
-The ASGI response deadline plus bounded transport finalization and shielded lease
-release now cover that case. OpenAPI generation exposed FastAPI0.115.6's status-code
-inference failure for the custom response; both routes explicitly declare200.
-The example had duplicated reserved SSE entries; they are consolidated. CI now
-fails for missing/below90% module coverage as well as low overall coverage.
-
-The new platform fixture must create is_platform_admin with tenant_id=None before
-insert, matching the existing invariant. Functional stream timing accommodates PG
-coverage latency without relaxing the independent deadline test. Final suites were
-restarted after the blocked-send fix; interrupted outputs are not final evidence.
-Earlier report statistics displayed only eight files through --stat's count
-argument; B10 now includes every file with separate width/graph options.
-No selected blocker remains; full-stack acceptance is still task3B.13.
+Task3B.13 first encounters a Windows-forbidden host1025 socket binding. Existing
+MAILPIT_SMTP_PORT=11025 resolves it without changing container SMTP or assertions.
+Review then finds the new runner leaves its platform-admin fixture active. The
+new regression fails as expected (B3); code records the owned UUID and retires it
+in finally, guarded by expected email/platform flag/tenant-less identity. Credentials
+are random per run and never logged; audit identities remain. Both earlier owned
+accounts are identified through their proof tenants/owners and disabled with all
+unrelated principals unchanged. The final real E29 rerun and refreshed full suites
+pass; the application database has4 owned proof principals and0 active (B6).
+No product feature/application change or selected blocker remains.
 
 ## B13. NOT VERIFIED
 
-- Full current-tree Docker E1–E30, including SSE E27/recovery E29; unselected3B.13.
-  Reviewed Part1 Docker and earlier dev-tools smoke are separately labelled B6.
 - Live Razorpay session/refund/settlement/entitlements, external SMTP/TLS/egress,
   hosted CI, production deployment/HA/soak and real browser/proxy performance.
 - Arbitrarily delayed transactions beyond the SSE gap window: refresh snapshots.
@@ -1557,12 +1612,21 @@ $env:COVERAGE_FILE='.coverage.review.postgres'
 & $py scripts/check_coverage.py .coverage.review.postgres.json
 & $py -m pytest -q -s app/tests/test_sse.py app/tests/test_failed_jobs_api.py app/tests/test_phase3b_quality.py
 docker compose --profile dev-tools config --quiet
+docker compose build
+# Choose an available host SMTP port if Windows blocks1025; container SMTP stays1025.
+$env:MAILPIT_SMTP_PORT='11025'
+& $py scripts/e2e_integrations.py
+# Optional focused diagnostics; not a substitute for the complete run:
+& $py scripts/e2e_integrations.py --section sellers --seller-case E27
+& $py -m pytest -q -s app/tests/test_part1_verification.py::test_postgres_full_part1_legacy_migration
 git diff --check main...HEAD
 git log --oneline main..HEAD
 ```
 
 After intentional route changes run python scripts/export_openapi.py and review
 docs/openapi.json. README contains the private Compose setup, dev-tools profile and
-receiver/fetch examples. Full Docker acceptance is deferred3B.13; the current
-e2e_integrations.py entrypoint implements the reviewed Part1 subset, not E27/E29.
+receiver/fetch examples. e2e_integrations.py runs all specified Phase3B experiments,
+with --section legacy|payments|abuse|sessions|sellers available for diagnosis.
+Run only one Docker acceptance process at a time: it temporarily reconfigures and
+restarts services, then restores defaults. Test databases remain separate.
 No real provider keys belong in test runs.
