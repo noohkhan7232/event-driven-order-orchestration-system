@@ -22,12 +22,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Honor FastAPI settings overrides as well as normal environment settings.
         override = request.app.dependency_overrides.get(get_settings)
         settings = override() if override else get_settings()
+        tracking = False
         for route in self.routes:
             match, child_scope = route.matches(request.scope)
             if match != Match.FULL:
                 continue
             policies = policies_for(request.method, getattr(route, "path", ""), settings)
             if policies:
+                tracking = any(policy.name == "tracking" for policy in policies)
                 request.scope["route"] = route
                 request.scope.update(child_scope)
                 ip = client_ip(request, settings.trusted_proxy_count)
@@ -73,6 +75,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                         )
             break
         response = await call_next(request)
+        if tracking:
+            response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
         for name, value in getattr(request.state, "rate_limit_headers", {}).items():
             response.headers[name] = value
         return response

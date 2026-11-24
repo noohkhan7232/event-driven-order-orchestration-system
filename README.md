@@ -2,474 +2,419 @@
 
 [![CI](https://github.com/noohkhan7232/event-driven-order-orchestration-system/actions/workflows/ci.yml/badge.svg)](https://github.com/noohkhan7232/event-driven-order-orchestration-system/actions/workflows/ci.yml)
 
-![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-SQLAlchemy-336791?logo=postgresql&logoColor=white)
-![RabbitMQ](https://img.shields.io/badge/RabbitMQ-Queues-FF6600?logo=rabbitmq&logoColor=white)
-![Celery](https://img.shields.io/badge/Celery-Workers-37814A)
-![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+A Python 3.12/FastAPI backend for independent sellers. Each seller owns a tenant,
+catalog, inventory, payment configuration and fulfillment workflow. PostgreSQL is
+the source of truth; a transactional outbox feeds RabbitMQ/Celery. Consumers use
+durable deduplication and state guards, and compensation releases stock and journals
+asynchronous refunds. Provider HTTP, seller webhook HTTP and SMTP run outside
+database transactions holding row locks.
 
-A production-style, event-driven backend that simulates how real e-commerce and logistics platforms process orders — where placing an order isn't one action, but a chain of independent steps (inventory, payment, shipping) that each need to succeed, fail, retry, or roll back on their own.
+Implemented through Phase 3B.12: per-tenant Razorpay integration, mock payments,
+COD, expiry/reconciliation, manual shipping, signed seller webhooks, notifications,
+revocable public tracking, SSE and owner/platform failed-job recovery APIs.
+The full Phase 3B Docker acceptance run (3B.13), live provider money flows, hosted
+CI execution and production deployment remain unverified. See the
+[current architecture and verification report](docs/reports/phase-3b-report.md).
 
----
-
-## The Problem
-
-Most "order system" demo projects are a single `POST /orders` endpoint that writes one row to a database. That's not how order processing actually works at scale.
-
-In a real system:
-
-- **Inventory might be unavailable** by the time payment is attempted.
-- **Payment might fail** after inventory has already been reserved.
-- **A network retry or a double-click** can send the exact same order request twice — and naive systems create two orders and charge twice.
-- **A background job can crash mid-task**, and if there's no retry or dead-letter handling, that order silently disappears.
-- **API response time matters** — a client shouldn't have to wait 5+ seconds while inventory, payment, and shipping are processed synchronously inside one request.
-
-These are the problems that separate a tutorial project from a system that could survive real traffic.
-
-## The Solution
-
-This educational backend demonstrates the following patterns and their current limitations:
-
-| Problem | How this project solves it |
-|---|---|
-| Duplicate order requests (retries, double-clicks) | Order creation requires an `Idempotency-Key`; scope and payload checks are described in the project review. Consumers are not yet idempotent. |
-| Slow, blocking order creation | The API commits the order and outbox intent together and returns 202; a relay publishes to RabbitMQ. All heavy work happens asynchronously. |
-| Multi-step workflows that can partially fail | Order → inventory reservation → payment authorization → shipment creation is broken into discrete steps, each independently retryable, with compensation logic (e.g., releasing reserved inventory if payment fails). |
-| Jobs that fail permanently | Exhausted retries persist failed jobs and compensate. Operator recovery reopens only technical failures with a fresh event; business failures cannot reopen. |
-| "Is the system healthy?" | Health and metrics endpoints expose API state. The workers endpoint lists static queue and schedule configuration. |
-| Access control | JWT-based authentication with role separation between customer, vendor, and admin. |
-
-## How It Works (Architecture)
-
-The current [reliability architecture and verification report](docs/reports/phase-2-report.md) documents the outbox, state machine, locking, retries, operations and real Docker experiments. The diagram below is the original workflow overview.
-
-![Architecture Diagram](docs/assets/architecture.png)
-
-**Request flow:**
-
-1. Client authenticates and receives a JWT.
-2. Client sends `POST /orders` with an `Idempotency-Key`.
-3. The API validates the request, checks the idempotency key, and persists the order as `created`.
-4. The API publishes an `order.created` event to RabbitMQ and immediately returns a response — the client is never blocked waiting for fulfillment.
-5. A Celery worker picks up the event and executes the workflow: reserve inventory → authorize payment → create shipment.
-6. Each step updates PostgreSQL and emits audit log entries.
-7. If a step fails, the worker retries with backoff; if retries are exhausted, failure details are logged to `failed_jobs` for investigation.
-8. Redis backs Celery's result store; application read caching is not implemented.
-
-This decouples the **API layer** (fast, synchronous, user-facing) from the **fulfillment layer** (slow, asynchronous, failure-tolerant) — which is the core idea behind event-driven backend design.
-
-## Demo Video
-
-Demo video: coming soon.
-
-## 📖 Demo Explanation
-
-For a detailed explanation of the demo and its workflow:
-
-👉 [Read the Demo Video Explanation](docs/demo-video-explanation.md)
-
-
-## Key Features
-
-- JWT authentication and RBAC roles: customer, vendor, admin
-- Idempotent order creation via `Idempotency-Key`
-- Order history and lifecycle status tracking
-- Inventory reservation, stock deduction, and release on failure
-- Payment initiation, success/failure simulation, retry, and compensation workflows
-- Shipment creation, shipment events, tracking status, and delayed shipment hooks
-- RabbitMQ queues, Celery workers, scheduled jobs, retries, and dead-letter handling
-- Audit logs and failed job persistence
-- Structured JSON logging, request timing, health checks, metrics, and worker monitoring endpoints
-- Full Docker Compose stack and pytest coverage for API/worker flows
-
-## Technology Stack
-
-| Area | Tools |
-|---|---|
-| API | Python 3.12, FastAPI, Pydantic |
-| Database | PostgreSQL, SQLAlchemy ORM, Alembic |
-| Async Processing | RabbitMQ, Celery workers, scheduled jobs |
-| Cache / Results | Redis |
-| Auth | JWT access tokens, password hashing, RBAC |
-| DevOps | Docker, Docker Compose, Makefile, GitHub Actions |
-| Quality | Pytest, API tests, worker flow tests, structured logging |
-
-## Project Structure
-
-```text
-app/
-  api/              FastAPI routers and route dependencies
-  auth/             JWT security and protected-route helpers
-  core/             config, logging, exceptions
-  db/               SQLAlchemy session and metadata
-  events/           event contracts and publisher helpers
-  middleware/       request context and timing
-  models/           order, inventory, payment, shipment, audit entities
-  observability/    health and metrics helpers
-  repositories/     database access layer
-  schemas/          Pydantic request/response contracts
-  services/         order, inventory, payment, shipping orchestration
-  workers/          Celery app and task definitions
-  tests/            pytest API and worker-flow tests
-scripts/            demo data seeding
-alembic/            migration history
-docs/               architecture diagram, project review
+```mermaid
+flowchart LR
+    Client --> API
+    API --> DB[(PostgreSQL: orders + outbox)]
+    DB --> Relay
+    Relay --> RabbitMQ
+    RabbitMQ --> Workers
+    Workers --> DB
+    Workers --> Providers[Payment / seller HTTP / SMTP]
+    DB --> Tracking[Safe tracking + short-poll SSE]
 ```
 
-## API Documentation
+## Local quickstart (PowerShell)
 
-Swagger UI:
+Run in the repository root with Docker Desktop and Docker Compose installed.
+The default stack reads **`.env.example`** and uses local mock payments,
+mock shipping and console notifications. These public demo defaults are for local
+development. The migration service upgrades the schema before application services
+start; do not run migrations concurrently with writers on an existing installation.
 
-```text
-http://127.0.0.1:8000/docs
+```powershell
+# If Windows reserves 8000, select another available host port.
+$env:API_PORT='18000'
+docker compose up -d --build
+$port = if ($env:API_PORT) { $env:API_PORT } else { '8000' }
+$base = "http://localhost:$port/api/v1"
+Invoke-RestMethod "$base/system/health"
 ```
 
-OpenAPI JSON:
+Swagger is at `http://localhost:18000/docs` with the override above; otherwise use
+port 8000. The live schema is `/api/v1/openapi.json`; the checked-in contract is
+[docs/openapi.json](docs/openapi.json). PostgreSQL publishes 5432, Redis 6379,
+RabbitMQ 5672 and its local management UI 15672. Choose local port overrides if
+those are reserved. The stack includes `api`, `worker`, `scheduler`, `outbox-relay`,
+`migrate`, `postgres`, `redis` and `rabbitmq`.
 
-```text
-http://127.0.0.1:8000/api/v1/openapi.json
+Register a seller, create priced stock, then place an order:
+
+```powershell
+$store = Invoke-RestMethod -Method Post "$base/tenants/register" -ContentType 'application/json' -Body '{"business_name":"Example Store","slug":"example-store","owner_email":"owner@example.com","owner_password":"replace-with-local-password","owner_name":"Owner"}'
+$login = Invoke-RestMethod -Method Post "$base/auth/login" -ContentType 'application/json' -Body '{"email":"owner@example.com","password":"replace-with-local-password"}'
+$headers = @{Authorization="Bearer $($login.access_token)"}
+$product = Invoke-RestMethod -Method Post "$base/products" -Headers $headers -ContentType 'application/json' -Body '{"sku":"DEMO","name":"Demo product","price":"19.99","currency":"INR"}'
+$warehouse = Invoke-RestMethod -Method Post "$base/inventory/warehouses" -Headers $headers -ContentType 'application/json' -Body '{"code":"MAIN","name":"Main warehouse","region":"local"}'
+$stock = @{sku='DEMO'; warehouse_id=$warehouse.id; available_quantity=20} | ConvertTo-Json
+$inventory = Invoke-RestMethod -Method Post "$base/inventory" -Headers $headers -ContentType 'application/json' -Body $stock
+$integration = Invoke-RestMethod -Method Post "$base/api-keys" -Headers $headers -ContentType 'application/json' -Body '{"name":"Order integration","scopes":["orders:read","orders:write"]}'
+$orderHeaders = @{'X-API-Key'=$integration.key; 'Idempotency-Key'='demo-1'}
+$order = Invoke-RestMethod -Method Post "$base/orders" -Headers $orderHeaders -ContentType 'application/json' -Body '{"items":[{"sku":"DEMO","quantity":3}],"external_reference":"shop-order-1"}'
 ```
 
-### Authentication Example
+The response is HTTP 202; prices come from the catalog and total 59.97 INR here.
+Retrying the same principal/key/payload returns the same order. Changed intent
+conflicts. Read `$base/orders/$($order.id)` with JWT or `orders:read` key credentials
+to observe asynchronous progress. Keep the creation-only integration key private.
+Buyer fields stay on orders and are excluded from emitted business events.
 
-```bash
-curl -X POST http://localhost:8000/api/v1/auth/signup \
-  -H "Content-Type: application/json" \
-  -d '{"tenant_slug":"default","email":"customer@ordersapp.com","password":"CustomerPass123","full_name":"Demo Customer"}'
+Owners are tenant ADMIN JWT users. Vendors are staff; customers see their own
+orders; integration keys have explicit scopes. Customer signup requires
+`tenant_slug`. Foreign owned IDs return 404. Platform administrators have no tenant
+and cannot use tenant-owner routes. Tenant suspension blocks new authenticated
+requests; public tracking returns 404 and active streams stop on a subsequent poll.
+Demo data is optional: `docker compose exec -T api python -m scripts.seed_demo`.
+That script contains public local fixture passwords and may print a newly created
+integration key once; do not use those accounts outside local development.
+
+## Private configuration
+
+Copy `.env.example` to the ignored `.env` only if `.env` does not already exist,
+then edit it privately. **Copying alone does not replace Compose's `env_file`.**
+For private settings, save this as ignored `.env.compose.yml`:
+
+```yaml
+x-private: &private
+  env_file: [.env]
+services:
+  api: *private
+  worker: *private
+  scheduler: *private
+  outbox-relay: *private
+  migrate: *private
 ```
 
-Log in at `POST /api/v1/auth/login` with email and password, then use the returned token:
+Start/recreate with `docker compose -f docker-compose.yml -f .env.compose.yml up -d --build`.
+Subsequent commands must retain both files. Later env files override earlier ones;
+explicit Compose `environment` entries still take precedence. This follows the
+[Compose environment rules](https://docs.docker.com/compose/how-tos/environment-variables/envvars-precedence/).
+Base Compose explicitly interpolates notification backend and failure injection
+from the shell/`.env`; it does not forward arbitrary shell variables automatically.
 
-```http
-Authorization: Bearer <access_token>
+Set a private strong `SECRET_KEY`, `TRACKING_TOKEN_SECRET` and Fernet
+`CREDENTIALS_ENCRYPTION_KEY`; never commit generated values. Set both
+`PUBLIC_BASE_URL` and `PUBLIC_TRACKING_BASE_URL` to your reachable origin, including
+the chosen API host port. Returned webhook/tracking URLs otherwise use port 8000.
+Keep all application processes on the same key ring and tracking secret.
+Outside local/dev/test, validators require strong keys, encryption material,
+manual shipping, no mock auto-completion/failure injection, and SMTP or an explicit
+console opt-out. The legacy provider selector also requires explicit
+`ALLOW_MOCK_PROVIDERS=true`; real tenant configuration still takes precedence for
+prepaid payments. Non-local prepaid intake still requires an active tenant Razorpay
+configuration. This development Compose stack is not a production deployment.
+
+`RATE_LIMIT_REDIS_URL` uses Redis DB2 in Compose. Request quotas use atomic fixed
+windows; login/register/signup/payment callbacks/public tracking fail closed if
+protection is unavailable. Authenticated request quotas default to fail open.
+SSE connection caps always fail closed; non-local streams require a working shared
+Redis backend. Local memory quotas/caps are per process. Default public tracking
+and stream opens share 60 requests/min/IP; active streams additionally have
+10/tenant and 5/IP caps. `TRUSTED_PROXY_COUNT=0` ignores XFF; only change it behind
+a proxy that sanitizes forwarding headers and prevents direct access.
+
+## Connect Razorpay (test mode)
+
+1. Obtain test-mode API keys from your Razorpay account. Configure private Fernet
+   material and a reachable HTTPS `PUBLIC_BASE_URL` in the application processes.
+2. As the seller owner, `PUT /api/v1/settings/payments/razorpay` with
+   `{key_id, key_secret, webhook_secret, mode:"test"}`. The API stores ciphertext
+   and returns a masked key ID plus its public `webhook_url`. Keys/vendors/customers
+   cannot manage these settings. GET is masked; DELETE deactivates.
+3. Register that returned URL in Razorpay using the same webhook secret. Subscribe
+   to `payment.captured`, `payment.failed`, `refund.processed` and `refund.failed`;
+   `order.paid` is also supported, and duplicate charge notices are harmless.
+4. Use INR catalog products. A pending prepaid order returns checkout data with
+   provider order ID, public key ID, integer paise amount and expiry. There is no
+   checkout frontend in this repository. A verified capture drives fulfillment;
+   a client success redirect alone does not mark the order paid.
+5. The callback verifies raw-body HMAC before parsing and persists a receipt plus
+   outbox intent before acknowledging. Expiry uses the payment window plus capture
+   grace; late/mismatched/duplicate charges journal asynchronous refunds.
+   Reconciliation polls unresolved payments and processing refunds outside locks.
+
+Contracts are checked against [Razorpay webhook validation](https://razorpay.com/docs/webhooks/validate-test/),
+[payment events](https://razorpay.com/docs/webhooks/payments/) and
+[refund events](https://razorpay.com/docs/webhooks/refunds/). Live keys, account
+entitlements, settlement and remote guarantees are not verified by local tests.
+`X-Razorpay-Signature` signs the original bytes with the **webhook secret**, not the
+API key secret. `x-razorpay-event-id` supports receipt deduplication. Do not parse
+and reserialize before verification. Keep signing-secret overlap when provider
+retries span a secret change; automatic old-secret history is not implemented.
+
+Python receiver verification:
+
+```python
+import hashlib
+import hmac
+import re
+
+
+def verify_razorpay(raw: bytes, signature: str, webhook_secret: str) -> bool:
+    expected = hmac.new(webhook_secret.encode(), raw, hashlib.sha256).hexdigest()
+    return bool(re.fullmatch(r"[0-9a-f]{64}", signature)) and hmac.compare_digest(expected, signature)
 ```
 
-### Create Order Request
+Node receiver verification:
 
-```bash
-curl -X POST http://localhost:8000/api/v1/orders \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Idempotency-Key: order-2026-0001" \
-  -H "Content-Type: application/json" \
-  -d '{"currency":"INR","items":[{"sku":"SKU-HEADPHONES","quantity":2}]}'
-```
-
-### Example Response
-
-```json
-{
-  "id": "7bed0cac-dbc0-4137-986a-42bfada3e0bc",
-  "status": "created",
-  "total_amount": "99.98",
-  "currency": "INR",
-  "payments": [],
-  "shipments": []
+```javascript
+import {createHmac, timingSafeEqual} from 'node:crypto';
+function verifyRazorpay(raw, signature, webhookSecret) {
+  if (!/^[0-9a-f]{64}$/.test(signature)) return false;
+  const expected = createHmac('sha256', webhookSecret).update(raw).digest();
+  return timingSafeEqual(expected, Buffer.from(signature, 'hex'));
 }
 ```
 
-This is an abbreviated immediate HTTP 202 response. Fulfillment runs asynchronously; later reads can include payments and shipments. Retrying the same payload and key as the same customer returns the same order ID with its current status.
+## Seller webhooks
 
-Operational endpoints:
+Owners create `POST /api/v1/webhook-endpoints` with `{url, events, description?}`.
+Creation/`POST /{id}/rotate-secret` shows `signing_secret` once; lists never show it.
+Subscribe to `order.created`, `order.status_changed`, `order.paid`, `order.shipped`,
+`order.delivered`, `order.failed`, `order.cancelled`, `payment.refunded` or `ping`.
+`POST /{id}/test` queues ping. List deliveries at `GET /{id}/deliveries`;
+`POST /{id}/deliveries/{delivery_id}/replay` requeues a dead delivery with the same
+event ID. Re-enable auto-disabled endpoints through PATCH before replay.
 
-```bash
-curl http://localhost:8000/api/v1/system/health
-curl http://localhost:8000/api/v1/system/metrics
-curl http://localhost:8000/api/v1/system/workers
+Delivery is at least once and ordering is not promised. Persistently deduplicate
+envelope `id` before applying effects; return 2xx only after durable acceptance.
+Verify the **raw bytes** using `X-OOS-Signature: t=<unix>,v1=<hex>` and
+`X-OOS-Timestamp`. The signed message is `t + '.' + body`, using the endpoint's
+`whsec_...` secret. Timestamp/signature refresh on each attempt. Neither receiver
+example logs secrets or bodies; deserialize only after successful verification.
+
+```python
+import time
+
+
+def verify_oos(raw: bytes, headers, secret: str) -> bool:
+    try:
+        parts = dict(piece.split("=", 1) for piece in headers["X-OOS-Signature"].split(","))
+        stamp, supplied = parts["t"], parts["v1"]
+        if not re.fullmatch(r"[0-9]+", stamp) or stamp != headers["X-OOS-Timestamp"]:
+            return False
+        if abs(time.time() - int(stamp)) > 300 or not re.fullmatch(r"[0-9a-f]{64}", supplied):
+            return False
+        expected = hmac.new(secret.encode(), stamp.encode() + b"." + raw, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, supplied)
+    except (KeyError, TypeError, ValueError):
+        return False
 ```
 
-## Database Design Overview
-
-Primary entities:
-
-- `users` — authenticated platform actors with role assignments
-- `orders` — order aggregate, idempotency key, and lifecycle state
-- `order_items` — line items and SKU quantities
-- `warehouses` — warehouse simulation data
-- `inventory` — stock, reserved quantity, and low-stock state
-- `payments` — payment transaction state and provider simulation result
-- `shipments` — tracking number, carrier, and fulfillment status
-- `shipment_events` — timestamped shipment lifecycle updates
-- `audit_logs` — traceable workflow and correction events
-- `failed_jobs` — exhausted retry/dead-letter diagnostics
-
-Database practices demonstrated:
-
-- UUID primary keys
-- Foreign key relationships across order, payment, shipment, inventory, and audit records
-- Indexes for idempotency key, order status, SKU, shipment tracking, and time-based lookups
-- Alembic migrations in `alembic/versions`
-
-## Docker Setup
-
-```bash
-cp .env.example .env
-docker compose up --build
+```javascript
+function verifyOos(raw, headers, secret) {
+  const parts = Object.fromEntries((headers['x-oos-signature'] ?? '').split(',').map(x => x.split('=')));
+  const stamp = parts.t;
+  if (!/^[0-9]+$/.test(stamp ?? '') || stamp !== headers['x-oos-timestamp'] ||
+      !Number.isSafeInteger(Number(stamp)) || Math.abs(Date.now()/1000 - Number(stamp)) > 300 ||
+      !/^[0-9a-f]{64}$/.test(parts.v1 ?? '')) return false;
+  const expected = createHmac('sha256', secret).update(stamp + '.').update(raw).digest();
+  return timingSafeEqual(expected, Buffer.from(parts.v1, 'hex'));
+}
 ```
 
-Services:
+The Python blocks share imports, as do the Node blocks. Default retries use
+exponential backoff with jitter, eight attempts over roughly 24h, then `dead`;
+20 consecutive failed attempts auto-disable an endpoint. Redirects are not followed.
+Strict SSRF rules require HTTPS, allowed ports and exclusively public DNS answers;
+delivery pins a validated IP while retaining original Host/TLS SNI. Private HTTP
+targets require an explicit local-only override and port allowlist. Do not put
+buyer details in merchant references, item names or tracking fields: those free
+text fields are not classified by a DLP system.
 
-| Container | Purpose |
-|---|---|
-| `api` | FastAPI application |
-| `worker` | Celery workers for order/inventory/payment/shipment queues |
-| `scheduler` | Celery Beat scheduled jobs |
-| `postgres` | PostgreSQL database |
-| `redis` | Celery result backend |
-| `rabbitmq` | Broker and management UI |
+## Manual shipping, email and development tools
 
-Initialize the database and demo data:
+Owners select `{"shipping_provider":"manual"}` through
+`PATCH /api/v1/settings/shipping`. Staff and `orders:write` keys set carrier,
+tracking number, HTTPS tracking URL and estimated date through
+`PATCH /api/v1/shipments/{id}`. Submit `{"status":"in_transit"}` then
+`{"status":"delivered"}` to `POST /api/v1/shipments/{id}/events`.
+Forward guards prevent stale observations moving an order backwards. Delivered
+COD orders collect the pending payment once. Cancellation atomically cancels a
+fulfillment shipment, releases stock and journals an owed prepaid refund.
+Courier aggregators, returns and RTO remain deferred.
 
-```bash
-docker compose exec api alembic upgrade head
-docker compose exec api python -m scripts.seed_demo
-```
-
-RabbitMQ management UI:
-
-```text
-http://localhost:15672
-guest / guest
-```
-
-## Local Development
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-make install
-make migrate
-make seed
-make run
-```
-
-Run a worker locally:
-
-```bash
-make worker
-```
-
-## Testing
-
-```bash
-make test
-```
-
-Test coverage includes:
-
-- Authentication and order API behavior
-- Health endpoint behavior
-- Worker flow simulation
-- Inventory reservation (see the hardening report for additional test evidence)
-
-## Environment Variables
-
-See [`.env.example`](.env.example). Important values:
-
-- `DATABASE_URL`
-- `TEST_DATABASE_URL`
-- `REDIS_URL`
-- `CELERY_BROKER_URL`
-- `CELERY_RESULT_BACKEND`
-- `SECRET_KEY` (at least 32 characters and not a known default outside local/development/test)
-- `METRICS_TOKEN` (authenticate metrics/workers with this token or a platform-admin JWT in every environment; tenant-admin JWTs are denied)
-
-## Project Review
-
-An engineering self-review is available here: [`docs/project-review.md`](docs/project-review.md).
-
-## Future Enhancements
-
-- Split inventory/payment/shipping into independent services
-- Payment gateway adapter layer
-- OpenTelemetry traces across API and workers
-- Warehouse allocation optimization
-- Kafka event stream for analytics fan-out
-- Admin DLQ replay and compensation dashboard
-
-## License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
-## Author
-
-**NOOH KHAN**
-[GitHub](https://github.com/noohkhan7232)
-
----
-
-This project demonstrates backend and platform engineering signals that can be verified quickly: FastAPI APIs, PostgreSQL modeling, SQLAlchemy/Alembic, JWT/RBAC, RabbitMQ/Celery workflows, Redis, idempotency, compensation logic, Docker Compose, automated tests, metrics, and worker monitoring.
-# Multi-tenant API quickstart (Phase 3A)
-
-Each seller owns a tenant. JWT staff accounts manage catalog and inventory;
-server integrations use scoped API keys. Customer signup now requires `tenant_slug`.
-Owner email addresses remain globally unique. Public onboarding uses rate limits and
-optional invite codes; captcha and email verification remain deferred.
-
-Run from PowerShell 7 with Docker Desktop. Set `$env:API_PORT='18000'` if Windows
-already reserves port 8000; otherwise the default is 8000.
+Notifications journal once per order/channel/template. Recipients are read at send
+time, masked in the journal and never placed in events. Owner JWTs use
+`GET/PATCH /api/v1/settings/notifications` with `{"notifications_enabled":false}`
+to opt out. Templates cover confirmation, shipping, delivery, failure, cancellation
+and completed refunds. SMTP calls run after session closure. Known transient
+rejections retry; permanent failures do not. An uncertain post-DATA/crash outcome
+is failed without automatic resend, avoiding possible duplicates but requiring
+operator investigation and potentially leaving a missed email.
 
 ```powershell
-docker compose up --build -d
-$port = if ($env:API_PORT) { $env:API_PORT } else { '8000' }
-$base = "http://localhost:$port/api/v1"
-curl.exe -sS "$base/tenants/register" -H 'Content-Type: application/json' -d '{"business_name":"Example Store","slug":"example-store","owner_email":"owner@example.com","owner_password":"replace-this-password","owner_name":"Owner"}'
-$login = curl.exe -sS "$base/auth/login" -H 'Content-Type: application/json' -d '{"email":"owner@example.com","password":"replace-this-password"}' | ConvertFrom-Json
-$jwt = "Authorization: Bearer $($login.access_token)"
-curl.exe -sS "$base/products" -H $jwt -H 'Content-Type: application/json' -d '{"sku":"DEMO","name":"Demo product","price":"19.99","currency":"INR"}'
-$warehouse = curl.exe -sS "$base/inventory/warehouses" -H $jwt -H 'Content-Type: application/json' -d '{"code":"MAIN","name":"Main warehouse","region":"local"}' | ConvertFrom-Json
-$stock = @{sku='DEMO'; warehouse_id=$warehouse.id; available_quantity=20} | ConvertTo-Json -Compress
-curl.exe -sS "$base/inventory" -H $jwt -H 'Content-Type: application/json' -d $stock
-$created = curl.exe -sS "$base/api-keys" -H $jwt -H 'Content-Type: application/json' -d '{"name":"Order integration","scopes":["orders:read","orders:write"]}' | ConvertFrom-Json
-# The full key is returned only here. Keep it in your server's secret store.
-curl.exe -sS "$base/orders" -H "X-API-Key: $($created.key)" -H 'Idempotency-Key: demo-1' -H 'Content-Type: application/json' -d '{"items":[{"sku":"DEMO","quantity":3}],"external_reference":"shop-order-1"}'
-# total_amount=59.97; worker progresses the order asynchronously.
+$env:NOTIFICATIONS_BACKEND='smtp'
+docker compose --profile dev-tools up -d
+# With private configuration, retain -f docker-compose.yml -f .env.compose.yml.
 ```
 
-Keys cannot manage users or other keys. Foreign tenant IDs return 404. Platform
-administrators have no tenant and use `/api/v1/admin/tenants` to suspend/activate stores;
-tenant owners cannot use those endpoints. Suspension blocks new requests immediately;
-already accepted events continue processing.
+Mailpit receives SMTP on `mailpit:1025`; its loopback UI is
+`http://localhost:8025`. The webhook sink listens inside Compose at
+`http://webhook-sink:8080`, with loopback host access on `http://localhost:8090`.
+Host ports use `MAILPIT_UI_PORT`, `MAILPIT_SMTP_PORT` and `WEBHOOK_SINK_PORT`.
+Sink `GET /received` lists bounded in-memory requests; `POST /config` accepts
+`{"failures":2,"clear":true}`. To register it as an application webhook target,
+privately set `WEBHOOK_ALLOW_INSECURE_TARGETS=true` and
+`WEBHOOK_EXTRA_ALLOWED_PORTS=[8080]`, then recreate with the private override.
+Validators forbid that insecure flag outside local/dev/test. The sink/profile is
+for development; restart discards its records. SMTP defaults have no TLS locally;
+configure STARTTLS/auth and private credentials for a real relay.
 
-Local demo seeding is `docker compose exec -T api python -m scripts.seed_demo`.
-It creates distinct tenant-owner and platform-admin users, catalog/stock, and prints
-one integration key only when creating it. Demo passwords in that script are public
-local fixtures. Existing users are never automatically elevated.
+## Public tracking and SSE
 
-Prices and names are snapshotted on order items. Unknown/archived SKUs, mixed
-currencies, mismatched supplied currency, and unsupported totals are rejected before
-persistence. Buyer fields stay on orders and are excluded from events and SQL logs.
+Authenticated order responses include `tracking_token` and `tracking_url`.
+`GET /api/v1/public/track/{token}` exposes friendly state, timeline, item names and
+quantities and shipment tracking. Buyer data, internal reasons and prices are
+excluded; `PUBLIC_TRACKING_SHOW_TOTAL=true` opts into total/currency only.
+Staff/`orders:write` keys can `POST /orders/{id}/tracking/rotate`; old links then
+return the same generic 404 as invalid/unknown/suspended-store links.
+Treat links as bearer credentials. Tracking responses use no-store/no-referrer;
+application, Uvicorn and HTTPX access logs redact their paths.
 
-Recovery uses `replay_failed_job(db, job_id, actor=operator_id, tenant_id=store_id)`;
-only compensated `FAILED/RETRIES_EXHAUSTED` orders reopen. Provider adapters currently
-use mocks only. Production-like environments require explicit `ALLOW_MOCK_PROVIDERS=true`.
-`PROCESSED_EVENTS_RETENTION_DAYS` defaults to 30 and must exceed your maximum
-redelivery/retry window. Failed jobs are retained until an explicit operator policy acts.
+SSE endpoints:
 
-Run `python scripts/e2e_reliability.py` followed by `python scripts/e2e_tenancy.py`
-for real-stack E1–E14 and supplements. These leave uniquely named test rows, restart
-selected services, and the tenancy runner restores failure injection to false.
-See [Phase 3A architecture and verification report](docs/reports/phase-3a-report.md).
+- `GET /api/v1/orders/stream?order_id=<optional UUID>`: staff/read keys see their
+  tenant; customers see only their own orders.
+- `GET /api/v1/public/track/{token}/stream`: one order, friendly states only.
 
-### Request limits and registration controls
+Frames contain `id: <order_timeline.id>`, `event: order.status_changed` and JSON
+`{order_id, from, to, at}`. Free-text reasons are excluded. New connections start
+at now; reconnect with `Last-Event-ID` or `?last_event_id=` to resume. The header
+takes precedence. Heartbeats default to15s; connections close after300s or the
+bounded event budget. Reconnect with the last processed ID and deduplicate IDs.
+Short poll sessions close before waits/yields; Redis pub/sub is not required.
 
-Phase 3B uses first-request fixed windows. Compose configures shared Redis on
-logical DB2 with `RATE_LIMIT_REDIS_URL`; without a configured URL, local/dev/test
-processes use memory. Memory windows are per process and are for local use.
-Non-local deployments without Redis use the documented degraded behavior.
+The default5s holdback and recent lookback handle bounded serial-ID commit gaps;
+buffered events cannot overtake unread replay batches. Transactions delayed beyond
+the configured window are not an arbitrary-duration lossless-resume guarantee.
+Refresh the authoritative order snapshot after reconnect or a prolonged outage.
+Suspension, key revocation/expiry, role changes and token rotation are checked on
+polls. Already accepted reads may finish. Slow database calls can delay teardown.
+Set proxy idle timeouts above heartbeat and disable proxy response buffering.
 
-| Requests | Default quota | Identity |
-|---|---|---|
-| Login | 10/minute and 5/15 minutes | Socket IP; normalized email + IP |
-| Tenant registration | 5/hour | IP |
-| Customer signup | 10/hour | IP |
-| Authenticated API | 600/minute across routes | API-key UUID or user UUID |
-| Docs, health, readiness | 600/minute | IP |
+Browser `EventSource` cannot set Authorization/X-API-Key headers. Use a fetch-based
+client for authenticated streams (the Phase4 dashboard is not implemented):
 
-Limits and windows have `RATE_LIMIT_*` settings in `.env.example`. A429 response
-contains `Retry-After` seconds and `X-RateLimit-Limit/Remaining/Reset` (Unix seconds).
-Successful quota headers describe the last applied policy; login applies both
-IP and email+IP policies. Fixed windows permit boundary bursts, not a sliding quota.
-Redis count/TTL updates are atomic; quota keys contain SHA256 digests, not emails,
-IP addresses or credential plaintext.
+```javascript
+async function readOrders(jwt, after, onEvent, signal) {
+  const headers = {Authorization: `Bearer ${jwt}`};
+  if (after != null) headers['Last-Event-ID'] = String(after);
+  const response = await fetch('/api/v1/orders/stream', {headers, signal});
+  if (!response.ok) throw Error(`Stream HTTP ${response.status}`);
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let pending = '';
+  try {
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      pending += decoder.decode(value, {stream:true});
+      let boundary;
+      while ((boundary = pending.indexOf('\n\n')) >= 0) {
+        const frame = pending.slice(0, boundary); pending = pending.slice(boundary + 2);
+        const lines = frame.split('\n'), id = lines.find(x => x.startsWith('id: '))?.slice(4);
+        const data = lines.filter(x => x.startsWith('data: ')).map(x => x.slice(6)).join('\n');
+        if (id && data) { await onEvent(id, JSON.parse(data)); after = id; }
+      }
+    }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  return after;
+}
+```
 
-Login/register/signup fail closed with503 when the limiter backend is unavailable.
-Authenticated requests default to fail open (`RATE_LIMIT_FAIL_OPEN=true`); set it
-false to return503 instead. Public health/docs remain available on backend failure.
-Degradation emits `rate_limit_degraded_total` and a log containing policy/mode only.
+Persist the cursor only after applying an event; reconnect after normal closure
+and respect Retry-After on429/503. Public clients use the tracking stream URL and
+omit authentication headers. Database timeline rows are the durable event source.
 
-`TRUSTED_PROXY_COUNT=0` ignores `X-Forwarded-For`. A positive value selects that
-many entries from the right; malformed/short headers fall back to the socket peer.
-Set this only behind a trusted proxy that sanitizes XFF and prevents direct access.
-`REGISTRATION_ENABLED=false` closes new-store registration. Set optional
-`REGISTRATION_INVITE_CODE` in a secret store to require an exact invite match;
-it is never stored or returned by onboarding. Email verification/captcha remain deferred.
-Tracking/SSE configuration and payment-webhook policies are reserved for their
-future routes; those endpoints are not introduced by the rate-limiting task.
+## Failed-job HTTP recovery
 
-### Order status history
+| Method and path under `/api/v1` | Credential |
+|---|---|
+|GET `/failed-jobs` (`status`, `task`, `limit`, `offset`)|Tenant owner JWT|
+|GET `/failed-jobs/{id}`|Tenant owner JWT; foreign404|
+|POST `/failed-jobs/{id}/replay`|Tenant owner JWT;202 durable requeue|
+|POST `/failed-jobs/{id}/discard`|Tenant owner JWT;204|
+|GET `/admin/failed-jobs` (same filters plus `tenant_id`)|Platform-admin JWT|
+|POST `/admin/failed-jobs/{id}/replay`|Platform-admin JWT|
+|POST `/admin/failed-jobs/{id}/discard`|Platform-admin JWT|
 
-`order_timeline` records one initial row at intake and one row per accepted
-transition/reopen. Each transition also writes an `order.status_changed` outbox
-intent in the same transaction. The workflow consumer acknowledges those status
-notifications without another transition. Replay and rolled-back operations add
-no duplicate/committed history. Free-text reasons stay in private timeline/audit
-records; events carry only declared reason codes or null.
+List/detail omit event payloads and arbitrary diagnostics. Known safe error codes
+are bounded to160 characters; other errors are replaced with a generic message.
+Unknown task/queue labels are masked. Keys/vendors/customers cannot recover jobs.
+Replay/discard use the existing order-before-job locking and write an actor audit
+in the same transaction. Concurrent replay has one winner. A second replay returns
+409 `job_already_replayed`; business/terminal/discarded jobs return
+`order_not_retryable`, owed refunds `refund_pending`. Only compensated technical
+`FAILED/RETRIES_EXHAUSTED` orders reopen with a fresh event; nonterminal recovery
+preserves the original identity. Invalid poison payloads are safe conflicts.
 
-Migration `0009_timeline` adds one synthetic observation for each existing order,
-tagged `MIGRATION_BACKFILL` at migration time. It does not invent old transitions
-or publish backfill events. Downgrade refuses operational timeline history until
-it has been explicitly archived; never force-drop the journal to bypass that guard.
+## Development and quality checks
 
-After starting the local stack with mock providers, run
-`python scripts/verify_rate_timeline.py` for a real API/broker/worker/Redis smoke.
-It checks quota headers, ordered history, four consumed status intents and
-idempotent replay, and leaves uniquely named local verification rows.
-The session foundation and tenant credentials are documented below.
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m ruff check .
+.venv\Scripts\python -m ruff format --check .
+.venv\Scripts\python -m mypy app
+# Use a clean local test profile; avoid container-only hostname settings from .env.
+$env:ENVIRONMENT='test'
+$env:SHIPPING_PROVIDER='mock'
+$env:PAYMENT_PROVIDER='mock'
+$env:NOTIFICATIONS_BACKEND='console'
+$env:RATE_LIMIT_REDIS_URL=''
+Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue
+Remove-Item Env:TEST_REDIS_URL -ErrorAction SilentlyContinue
+$env:COVERAGE_FILE='.coverage.review.sqlite'
+.venv\Scripts\python -m pytest -q --cov=app --cov-report=term-missing --cov-report=json:.coverage.review.sqlite.json --cov-fail-under=90
+.venv\Scripts\python scripts/check_coverage.py .coverage.review.sqlite.json
+```
 
-### Tenant payment credentials
+Use `.venv/bin/python` on Unix. For the real PostgreSQL/Redis layer, start those
+services, create a dedicated disposable database named `orders_test` if needed,
+set the variables below, then run the same checks with a separate coverage file:
 
-Tenant owners use JWT authentication for `PUT/GET/DELETE
-/api/v1/settings/payments/razorpay`. API keys, vendors, customers and platform
-administrators cannot manage these settings. PUT accepts key_id, key_secret,
-webhook_secret and mode (test/live). Responses expose only the key ID's last four
-characters, the public webhook identifier/URL, mode and active flag. DELETE
-deactivates the configuration. The webhook URL is reserved until the inbound
-payment webhook task is implemented; do not connect provider delivery yet.
+```powershell
+$env:TEST_DATABASE_URL='postgresql+psycopg://orders:orders@localhost:5432/orders_test'
+$env:TEST_REDIS_URL='redis://localhost:6379/15'
+$env:COVERAGE_FILE='.coverage.review.postgres'
+.venv\Scripts\python -m pytest -q --cov=app --cov-report=term-missing --cov-report=json:.coverage.review.postgres.json --cov-fail-under=90
+.venv\Scripts\python scripts/check_coverage.py .coverage.review.postgres.json
+.venv\Scripts\python scripts/export_openapi.py --check
+# After an intentional API change:
+.venv\Scripts\python scripts/export_openapi.py
+```
 
-Set `CREDENTIALS_ENCRYPTION_KEY` through your secret store to a Fernet key before
-storing credentials, including locally. It is required outside local/dev/test.
-No generated fallback key is persisted. Set `PUBLIC_BASE_URL` to your externally
-reachable application origin (default http://localhost:8000).
+Tests drop/recreate their test schema: PostgreSQL names must end in `_test`.
+Never point at the application database or overlap runs on one test database.
+Tests never call real external providers; PostgreSQL/Redis tests use local test
+services. Coverage omits tests and enforces≥90% overall and per required new module.
+CI has SQLite and PostgreSQL+Redis jobs; this is configuration, not a claim that
+hosted CI ran. The OpenAPI freshness test compares the artifact with current routes.
+Full Docker E1–E30 acceptance, including SSE/failed-job experiments, remains3B.13;
+the current `scripts/e2e_integrations.py` covers the reviewed Part1 subset.
 
-For key rotation, deploy a comma-separated Fernet key ring with the new key first
-and existing keys after it. MultiFernet encrypts new writes with the first key and
-decrypts with all configured keys. In a controlled maintenance transaction, use
-`CredentialVault.rotate()` on each key_secret_enc and webhook_secret_enc, verify
-decryption under the new key, commit, and only then retire old keys from all
-processes and the secret store. Retain keys required by backups. Never print keys,
-decrypted credentials or tokens in commands/logs. The configuration migration
-refuses downgrade while credential rows exist; archive them under your retention
-policy before removing the table.
+## Limits and references
 
-### Payment sessions and COD
+Mock lookup maps and local memory quotas are process-local. Webhook delivery is
+at least once; SMTP has uncertain-outcome limits. No live payment/settlement,
+production HA/soak, PostgreSQL RLS, frontend, real courier aggregation, returns/RTO,
+WhatsApp/SMS, GST invoicing or hosting is claimed. See
+[Phase3B report](docs/reports/phase-3b-report.md) for configuration, migrations,
+security boundaries, proof outputs and the current NOT VERIFIED list.
 
-Orders accept `payment_method` as `prepaid` (default) or `cod`. Default prepaid
-requests retain their existing idempotency fingerprints. A changed payment method
-conflicts with an existing request key. Prepaid intake requires an active owned
-Razorpay configuration or explicit local `ALLOW_MOCK_PROVIDERS=true` permission.
-COD intake remains available without payment credentials.
-
-Inventory reservation emits `payment.requested`. The handler first locks the order,
-creates a durable payment attempt and PAYMENT_PENDING transition, sets the payment
-window, then commits. It passes detached inputs to the provider after releasing
-locks. A final transaction saves checkout data only while the order remains pending
-and the attempt has no provider reference. Retries retain the attempt and its key.
-Recovery after a compensated failure creates a new numbered attempt. Cancellation
-during the call discards the returned session. Legacy inventory.reserved messages
-remain accepted for existing queued work.
-
-Pending prepaid responses expose payment_method, payment_status, payment_expires_at,
-and checkout containing provider, provider_order_id, public key_id, amount_minor,
-currency and expires_at. Checkout disappears after the order leaves pending state.
-Razorpay is limited to INR, uses integer paise and checks the exact receipt before
-creating a session. Refund adapter calls use receipt lookup and the documented
-X-Refund-Idempotency header. Adapter errors exclude provider response bodies.
-
-The local mock signs synthetic captures and parses them through the normalized
-provider-event contract before applying the shared capture handler. Set
-`MOCK_PAYMENT_AUTO_COMPLETE=false` to inspect a pending session. Auto-complete is
-forbidden outside local/development/test. `MOCK_REFUND_FAIL_ATTEMPTS` defaults to0.
-Its simulation state is process-local and survives adapter re-resolution within
-that process. `MOCK_WEBHOOK_SECRET` configures its signing secret.
-`PAYMENT_WINDOW_SECONDS` defaults to1800.
-
-COD creates a pending-collection payment and shipment without a checkout session.
-Its state transition permits INVENTORY_RESERVED directly to FULFILLMENT_REQUESTED
-only for COD. Delivery status notifications mark the payment collected once.
-Cancellation releases stock and cancels its shipment in the existing transaction.
-
-Inbound webhook HTTP delivery, durable refund orchestration, expiry scheduling and
-reconciliation belong to the remaining saga tasks. Until those are installed,
-real prepaid sessions await those integrations before completing the order.
+MIT licensed: [LICENSE](LICENSE). Author: **NOOH KHAN** —
+[GitHub](https://github.com/noohkhan7232).

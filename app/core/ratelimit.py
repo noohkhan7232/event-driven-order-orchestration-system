@@ -50,6 +50,12 @@ class RateLimiter(ABC):
     def hit(self, key: str, limit: int, window: int) -> Decision:
         raise NotImplementedError
 
+    def acquire(self, keys: tuple[tuple[str, int], ...], token: str, ttl: float) -> bool:
+        raise BackendUnavailable()
+
+    def release(self, keys: tuple[tuple[str, int], ...], token: str) -> None:
+        raise BackendUnavailable()
+
 
 def decision(count: int, limit: int, expires: float, now: float) -> Decision:
     return Decision(count <= limit, limit, max(0, limit - count), math.ceil(expires), max(1, math.ceil(expires - now)))
@@ -60,6 +66,7 @@ class MemoryRateLimiter(RateLimiter):
         self.clock = clock
         self.lock = Lock()
         self.windows: dict[str, tuple[int, float]] = {}
+        self.leases: dict[str, dict[str, float]] = {}
 
     def hit(self, key: str, limit: int, window: int) -> Decision:
         with self.lock:
@@ -73,6 +80,28 @@ class MemoryRateLimiter(RateLimiter):
             self.windows[key] = count, expires
             return decision(count, limit, expires, now)
 
+    def acquire(self, keys: tuple[tuple[str, int], ...], token: str, ttl: float) -> bool:
+        with self.lock:
+            now = self.clock()
+            self.leases = {
+                key: {t: end for t, end in rows.items() if end > now}
+                for key, rows in self.leases.items()
+                if any(end > now for end in rows.values())
+            }
+            if any(len(self.leases.get(key, {})) >= limit for key, limit in keys):
+                return False
+            for key, _ in keys:
+                self.leases.setdefault(key, {})[token] = now + ttl
+            return True
+
+    def release(self, keys: tuple[tuple[str, int], ...], token: str) -> None:
+        with self.lock:
+            for key, _ in keys:
+                rows = self.leases.get(key, {})
+                rows.pop(token, None)
+                if not rows:
+                    self.leases.pop(key, None)
+
 
 SCRIPT = """
 local count = redis.call('INCR', KEYS[1])
@@ -83,6 +112,24 @@ if count == 1 or ttl < 0 then
 end
 local now = redis.call('TIME')
 return {count, ttl, now[1], now[2]}
+"""
+
+ACQUIRE_STREAM = """
+local clock = redis.call('TIME')
+local now = tonumber(clock[1])*1000 + tonumber(clock[2])/1000
+for i,key in ipairs(KEYS) do
+    redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
+    if redis.call('ZCARD', key) >= tonumber(ARGV[i+2]) then return 0 end
+end
+for _,key in ipairs(KEYS) do
+    redis.call('ZADD', key, now+tonumber(ARGV[2]), ARGV[1])
+    redis.call('PEXPIRE', key, tonumber(ARGV[2])+1000)
+end
+return 1
+"""
+RELEASE_STREAM = """
+for _,key in ipairs(KEYS) do redis.call('ZREM', key, ARGV[1]) end
+return 1
 """
 
 
@@ -101,6 +148,28 @@ class RedisRateLimiter(RateLimiter):
             raise BackendUnavailable() from None
         now = int(seconds) + int(micros) / 1000000
         return decision(int(count), limit, now + int(ttl) / 1000, now)
+
+    def acquire(self, keys: tuple[tuple[str, int], ...], token: str, ttl: float) -> bool:
+        try:
+            result = self.client.eval(
+                ACQUIRE_STREAM,
+                len(keys),
+                *(self.namespace + "stream:" + key for key, _ in keys),
+                token,
+                str(math.ceil(ttl * 1000)),
+                *(str(limit) for _, limit in keys),
+            )
+            if result not in (0, 1):
+                raise BackendUnavailable()
+            return result == 1
+        except RedisError:
+            raise BackendUnavailable() from None
+
+    def release(self, keys: tuple[tuple[str, int], ...], token: str) -> None:
+        try:
+            self.client.eval(RELEASE_STREAM, len(keys), *(self.namespace + "stream:" + key for key, _ in keys), token)
+        except RedisError:
+            raise BackendUnavailable() from None
 
 
 class UnavailableRateLimiter(RateLimiter):
@@ -190,6 +259,7 @@ def policies_for(method: str, path: str, settings: Settings) -> tuple[Policy, ..
             Policy("tracking", settings.rate_limit_tracking_limit, settings.rate_limit_tracking_window_seconds, "ip"),
         ),
     }
+    registry["GET", "/api/v1/public/track/{token}/stream"] = registry["GET", "/api/v1/public/track/{token}"]
     for public_path in [
         "/docs",
         "/docs/oauth2-redirect",

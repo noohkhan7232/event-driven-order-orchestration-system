@@ -66,6 +66,35 @@ def test_tenant_resource_isolation_matrix(client, db, role):
     else:
         headers = {"Authorization": f"Bearer {AuthService(db).login(other.email, 'strong-password')}"}
     assert client.get(f"/api/v1/orders/{order.id}", headers=headers).status_code == 404
+    assert client.get(f"/api/v1/orders/stream?order_id={order.id}", headers=headers).status_code == 404
+    from app.models.entities import FailedJob
+
+    failure = FailedJob(
+        tenant_id=a.id,
+        aggregate_id=order.id,
+        task_name="app.workers.tasks.process_event",
+        queue_name="orders",
+        payload={},
+        error_message="private diagnostic",
+    )
+    db.add(failure)
+    db.commit()
+    for method, path in (
+        ("GET", f"/api/v1/failed-jobs/{failure.id}"),
+        ("POST", f"/api/v1/failed-jobs/{failure.id}/replay"),
+        ("POST", f"/api/v1/failed-jobs/{failure.id}/discard"),
+    ):
+        assert client.request(method, path, headers=headers).status_code == (404 if role == "admin" else 403)
+    failed_listing = client.get("/api/v1/failed-jobs", headers=headers)
+    assert failed_listing.status_code == (200 if role == "admin" else 403)
+    if role == "admin":
+        assert failed_listing.json()["total"] == 0 and failed_listing.json()["items"] == []
+    for method, path in (
+        ("GET", "/api/v1/admin/failed-jobs"),
+        ("POST", f"/api/v1/admin/failed-jobs/{failure.id}/replay"),
+        ("POST", f"/api/v1/admin/failed-jobs/{failure.id}/discard"),
+    ):
+        assert client.request(method, path, headers=headers).status_code == 403
     assert client.get(f"/api/v1/products/{product_a.id}", headers=headers).status_code == 404
     assert client.patch(f"/api/v1/products/{product_a.id}", headers=headers, json={"price": "0"}).status_code == 404
     catalog = client.get("/api/v1/products", headers=headers)
@@ -157,7 +186,7 @@ def test_route_registry_has_no_unclassified_routes():
     from app.main import app
 
     public_webhook = {("POST", "/api/v1/webhooks/payments/{provider}/{webhook_public_id}")}
-    public_tracking = {("GET", "/api/v1/public/track/{token}")}
+    public_tracking = {("GET", "/api/v1/public/track/{token}"), ("GET", "/api/v1/public/track/{token}/stream")}
     public = {
         ("GET", "/docs"),
         ("HEAD", "/docs"),
@@ -174,6 +203,11 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("GET", "/api/v1/failed-jobs"),
+        ("GET", "/api/v1/failed-jobs/{job_id}"),
+        ("POST", "/api/v1/failed-jobs/{job_id}/replay"),
+        ("POST", "/api/v1/failed-jobs/{job_id}/discard"),
+        ("GET", "/api/v1/orders/stream"),
         ("POST", "/api/v1/orders/{order_id}/tracking/rotate"),
         ("GET", "/api/v1/settings/notifications"),
         ("PATCH", "/api/v1/settings/notifications"),
@@ -213,6 +247,11 @@ def test_route_registry_has_no_unclassified_routes():
         ("DELETE", "/api/v1/api-keys/{key_id}"),
     }
     platform = {("GET", "/api/v1/system/metrics"), ("GET", "/api/v1/system/workers")}
+    platform |= {
+        ("GET", "/api/v1/admin/failed-jobs"),
+        ("POST", "/api/v1/admin/failed-jobs/{job_id}/replay"),
+        ("POST", "/api/v1/admin/failed-jobs/{job_id}/discard"),
+    }
     platform |= {
         ("GET", "/api/v1/admin/tenants"),
         ("GET", "/api/v1/admin/tenants/{tenant_id}"),

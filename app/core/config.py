@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     rate_limit_tracking_window_seconds: int = Field(default=60, ge=1)
     sse_tenant_connection_limit: int = Field(default=10, ge=1)
     sse_ip_connection_limit: int = Field(default=5, ge=1)
+    sse_max_seconds: float = Field(default=300, gt=0, le=3600)
+    sse_poll_seconds: float = Field(default=1, gt=0, le=15)
+    sse_heartbeat_seconds: float = Field(default=15, gt=0, le=60)
+    sse_lookback_seconds: float = Field(default=5, gt=0, le=60)
+    sse_batch_size: int = Field(default=200, ge=1, le=1000)
+    sse_max_events: int = Field(default=10000, ge=1, le=10000)
     registration_enabled: bool = True
     registration_invite_code: SecretStr | None = Field(default=None, min_length=1)
     credentials_encryption_key: SecretStr | None = None
