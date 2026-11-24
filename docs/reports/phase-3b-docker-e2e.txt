@@ -1,0 +1,79 @@
+ISOLATED Redis HTTP quotas; normal quota counters and all data volumes preserved
+PASS E1 happy path: fulfillment_requested; payment=1 shipment=1 stock=(9,1)
+PASS E2 insufficient inventory: failed/INSUFFICIENT_INVENTORY; stock=(0,0); retry jobs=0
+PASS E3 payment decline: failed/PAYMENT_DECLINED; stock=(10,0); retry jobs=0
+PASS E4 shipment failure: failed/SHIPMENT_FAILED; stock=(10,0); retry jobs=0
+PASS E5 worker crash and redelivery: SIGKILL before consumption; resumed; broker redelivery; one reservation/payment/shipment
+PASS E6 broker outage: five HTTP 202; pending backlog=5; recovered all five; no duplicate effects
+PASS E7 request idempotency: one order; one order.created intent; one payment/shipment
+PASS E8 concurrent orders: 30-vs-10: fulfilled=10 failed=20 available=0 reserved=10 conserved=10
+PASS S5 transient retry: transient retry succeeds; exactly one reservation/payment/shipment
+PASS S6 exhausted retry and replay: retries exhausted=3; stock compensated; replay completed; one abandoned + one captured attempt, one shipment
+PASS S10 cancellation at every requested state: CREATED/INVENTORY_RESERVED/PAID/FULFILLMENT_REQUESTED; repeated cancel; stock/refund/shipment correct
+RESULT: 11/11 experiments passed
+NAME                                                              IMAGE                                                  COMMAND                  SERVICE                 CREATED          STATUS                    PORTS
+event-driven-order-orchestration-system-api-1                     event-driven-order-orchestration-system-api            "uvicorn app.main:ap…"   api                     57 seconds ago   Up 44 seconds             0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+event-driven-order-orchestration-system-mailpit-1                 axllent/mailpit:latest                                 "/mailpit"               mailpit                 19 minutes ago   Up 19 minutes (healthy)   127.0.0.1:8025->8025/tcp, 127.0.0.1:11025->1025/tcp
+event-driven-order-orchestration-system-outbox-relay-1            event-driven-order-orchestration-system-outbox-relay   "python -m app.worke…"   outbox-relay            57 seconds ago   Up 44 seconds             8000/tcp
+event-driven-order-orchestration-system-postgres-1                postgres:16-alpine                                     "docker-entrypoint.s…"   postgres                2 months ago     Up 57 minutes (healthy)   0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+event-driven-order-orchestration-system-proof-rate-12bdb6ec8e-1   redis:7-alpine                                         "docker-entrypoint.s…"   proof-rate-12bdb6ec8e   6 minutes ago    Up 6 minutes (healthy)    6379/tcp
+event-driven-order-orchestration-system-rabbitmq-1                rabbitmq:3.13-management-alpine                        "docker-entrypoint.s…"   rabbitmq                2 months ago     Up 4 minutes (healthy)    0.0.0.0:5672->5672/tcp, [::]:5672->5672/tcp, 0.0.0.0:15672->15672/tcp, [::]:15672->15672/tcp
+event-driven-order-orchestration-system-redis-1                   redis:7-alpine                                         "docker-entrypoint.s…"   redis                   13 hours ago     Up 57 minutes             0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+event-driven-order-orchestration-system-scheduler-1               event-driven-order-orchestration-system-scheduler      "celery -A app.worke…"   scheduler               52 seconds ago   Up 42 seconds             8000/tcp
+event-driven-order-orchestration-system-webhook-sink-1            python:3.12-alpine                                     "python /app/scripts…"   webhook-sink            21 minutes ago   Up 21 minutes             127.0.0.1:8090->8080/tcp
+event-driven-order-orchestration-system-worker-1                  event-driven-order-orchestration-system-worker         "celery -A app.worke…"   worker                  54 seconds ago   Up 43 seconds             8000/tcp
+PASS E9 two tenant workflows: two registered stores; same SKU; key orders completed independently; stock=(17,3) each
+PASS E10 isolation: B JWT/key foreign order/product/inventory=404; list totals=1; A IDs absent; shared idempotency independent
+PASS E11 pricing: 19.99 x 3=59.97; product changed to25; snapshot unchanged; unknown SKU=422
+PASS E12 key lifecycle and suspension: revoked/expired=401; suspended JWT/key=403; activation restored both
+PASS E13 exhausted recovery: retries exhausted=3; stock compensated; replay completed; one abandoned + one captured attempt, one shipment
+PASS E14 cross-tenant concurrency: 20 concurrent orders per tenant, shared SKU: fulfilled=10 failed=10 each; stock independent
+RESULT: 6/6 tenancy experiments passed
+NAME                                                              IMAGE                                                  COMMAND                  SERVICE                 CREATED          STATUS                       PORTS
+event-driven-order-orchestration-system-api-1                     event-driven-order-orchestration-system-api            "uvicorn app.main:ap…"   api                     49 seconds ago   Up 36 seconds                0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+event-driven-order-orchestration-system-mailpit-1                 axllent/mailpit:latest                                 "/mailpit"               mailpit                 23 minutes ago   Up 23 minutes (healthy)      127.0.0.1:8025->8025/tcp, 127.0.0.1:11025->1025/tcp
+event-driven-order-orchestration-system-outbox-relay-1            event-driven-order-orchestration-system-outbox-relay   "python -m app.worke…"   outbox-relay            49 seconds ago   Up 37 seconds                8000/tcp
+event-driven-order-orchestration-system-postgres-1                postgres:16-alpine                                     "docker-entrypoint.s…"   postgres                2 months ago     Up About an hour (healthy)   0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+event-driven-order-orchestration-system-proof-rate-12bdb6ec8e-1   redis:7-alpine                                         "docker-entrypoint.s…"   proof-rate-12bdb6ec8e   10 minutes ago   Up 10 minutes (healthy)      6379/tcp
+event-driven-order-orchestration-system-rabbitmq-1                rabbitmq:3.13-management-alpine                        "docker-entrypoint.s…"   rabbitmq                2 months ago     Up 8 minutes (healthy)       0.0.0.0:5672->5672/tcp, [::]:5672->5672/tcp, 0.0.0.0:15672->15672/tcp, [::]:15672->15672/tcp
+event-driven-order-orchestration-system-redis-1                   redis:7-alpine                                         "docker-entrypoint.s…"   redis                   13 hours ago     Up About an hour             0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+event-driven-order-orchestration-system-scheduler-1               event-driven-order-orchestration-system-scheduler      "celery -A app.worke…"   scheduler               45 seconds ago   Up 35 seconds                8000/tcp
+event-driven-order-orchestration-system-webhook-sink-1            python:3.12-alpine                                     "python /app/scripts…"   webhook-sink            25 minutes ago   Up 25 minutes                127.0.0.1:8090->8080/tcp
+event-driven-order-orchestration-system-worker-1                  event-driven-order-orchestration-system-worker         "celery -A app.worke…"   worker                  46 seconds ago   Up 36 seconds                8000/tcp
+PASS E20 PAID: real shipment consumer paused; attempts=3; one refund/audit/intent; stock restored
+PASS E20: broker/prefork worker; two transient failures, attempts=3, one refund success/audit; shipment cancelled, stock restored
+PASS E17 pipeline: signed mock mismatch -> receipt -> broker consumer -> async refund; pending, no shipment
+PASS late-cancel pipeline: signed late payment refunded, cancellation and stock preserved (beat expiry is checked separately by E16)
+PASS E15 HTTP fixture: raw HMAC accepted once, duplicate=200, bad/missing=401, oversize=413; broker fulfillment one payment/shipment; NO remote Razorpay session/money
+PASS E16: actual beat expiry after window+grace, stock restored; signed late capture twice, one succeeded refund, no fulfillment
+RESTORED api {"auto_complete": true, "refund_fail_attempts": 0, "allow_mock": true, "failure_injection": false, "encryption_configured": false}
+RESTORED worker {"auto_complete": true, "refund_fail_attempts": 0, "allow_mock": true, "failure_injection": false, "encryption_configured": false}
+PASS E28: login email/IP and registration quotas, forged XFF ignored, independent API keys, strict429/Retry-After headers
+PASS E30:30 orders+15 adjustments, accepted_delta=5, fulfilled=25, stock conserved and audits exact
+RESTORED quota runtime {"login_ip": 10, "login_email": 5, "register": 5, "authenticated": 600, "trusted_proxies": 0, "shared_rate_backend": true}
+PASS E19: manual metadata/events; stale/duplicate harmless; one DELIVERED and one COD collection/audit
+PASS E22: four logical lifecycle events; every received signature independently verified; delivered logs, no buyer PII
+PASS E23: 503/503/204; exhaustion dead after3; replay same event ID/replay_count1; one success each
+PASS E24: 14 real API rejections: localhost, metadata/private/CGNAT, IPv6/mapped, encoded IPs and non-HTTPS
+PASS E25: Mailpit exactly1 per trigger across6 templates; graceful worker restart mid-order and repeat polls no resend; opt-out0
+PASS E26: safe public JSON/headers; rotate invalidates old link; configured3-request quota returns429/Retry-After
+PASS E27: real HTTP live sequence; disconnect/reconnect Last-Event-ID exact timeline; friendly public stream; foreign0
+PASS E29: real exhausted retries; owner/foreign/platform HTTP; replay once, exact attempts/shipment/stock; discard+actor audits
+PASS session subset: pending checkout, durable attempt, cancellation and stock release
+PASS E18: COD fulfillment without session; cancellation releases stock and shipment
+RESTORED worker runtime {"auto_complete": true, "allow_mock": true, "failure_injection": false}
+RESTORED api {"auto_complete": true, "refund_failures": 0, "window": 1800, "grace": 120, "expiry_interval": 30.0, "reconcile_after": 60, "reconcile_interval": 60.0, "failure_injection": false, "shared_rate_backend": true, "rate_backend_is_default": true, "encryption_configured": false, "notifications_backend": "console", "webhook_insecure": false, "webhook_attempts": 8, "webhook_interval": 10.0, "notification_interval": 10.0, "stream_max": 300.0, "stream_poll": 1.0, "stream_lookback": 5.0, "tracking_limit": 60}
+RESTORED worker {"auto_complete": true, "refund_failures": 0, "window": 1800, "grace": 120, "expiry_interval": 30.0, "reconcile_after": 60, "reconcile_interval": 60.0, "failure_injection": false, "shared_rate_backend": true, "rate_backend_is_default": true, "encryption_configured": false, "notifications_backend": "console", "webhook_insecure": false, "webhook_attempts": 8, "webhook_interval": 10.0, "notification_interval": 10.0, "stream_max": 300.0, "stream_poll": 1.0, "stream_lookback": 5.0, "tracking_limit": 60}
+RESTORED scheduler {"auto_complete": true, "refund_failures": 0, "window": 1800, "grace": 120, "expiry_interval": 30.0, "reconcile_after": 60, "reconcile_interval": 60.0, "failure_injection": false, "shared_rate_backend": true, "rate_backend_is_default": true, "encryption_configured": false, "notifications_backend": "console", "webhook_insecure": false, "webhook_attempts": 8, "webhook_interval": 10.0, "notification_interval": 10.0, "stream_max": 300.0, "stream_poll": 1.0, "stream_lookback": 5.0, "tracking_limit": 60}
+NAME                                                     IMAGE                                                  COMMAND                  SERVICE        CREATED              STATUS                       PORTS
+event-driven-order-orchestration-system-api-1            event-driven-order-orchestration-system-api            "uvicorn app.main:ap…"   api            27 seconds ago       Up 17 seconds                0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+event-driven-order-orchestration-system-mailpit-1        axllent/mailpit:latest                                 "/mailpit"               mailpit        38 minutes ago       Up 38 minutes (healthy)      127.0.0.1:8025->8025/tcp, 127.0.0.1:11025->1025/tcp
+event-driven-order-orchestration-system-migrate-1        event-driven-order-orchestration-system-migrate        "alembic upgrade head"   migrate        40 minutes ago       Exited (0) 18 seconds ago
+event-driven-order-orchestration-system-outbox-relay-1   event-driven-order-orchestration-system-outbox-relay   "python -m app.worke…"   outbox-relay   15 minutes ago       Up 15 minutes                8000/tcp
+event-driven-order-orchestration-system-postgres-1       postgres:16-alpine                                     "docker-entrypoint.s…"   postgres       2 months ago         Up About an hour (healthy)   0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+event-driven-order-orchestration-system-rabbitmq-1       rabbitmq:3.13-management-alpine                        "docker-entrypoint.s…"   rabbitmq       2 months ago         Up 23 minutes (healthy)      0.0.0.0:5672->5672/tcp, [::]:5672->5672/tcp, 0.0.0.0:15672->15672/tcp, [::]:15672->15672/tcp
+event-driven-order-orchestration-system-redis-1          redis:7-alpine                                         "docker-entrypoint.s…"   redis          13 hours ago         Up About an hour             0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+event-driven-order-orchestration-system-scheduler-1      event-driven-order-orchestration-system-scheduler      "celery -A app.worke…"   scheduler      About a minute ago   Up 51 seconds                8000/tcp
+event-driven-order-orchestration-system-webhook-sink-1   python:3.12-alpine                                     "python /app/scripts…"   webhook-sink   40 minutes ago       Up 40 minutes                127.0.0.1:8090->8080/tcp
+event-driven-order-orchestration-system-worker-1         event-driven-order-orchestration-system-worker         "celery -A app.worke…"   worker         About a minute ago   Up 52 seconds                8000/tcp
+PASS selected Phase 3B acceptance section: all

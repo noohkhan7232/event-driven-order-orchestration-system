@@ -1,0 +1,68 @@
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial, initial order platform schema
+INFO  [alembic.runtime.migration] Running upgrade 0001_initial -> 0002_idempotency, Scope idempotency by customer and store validated request fingerprints.
+INFO  [alembic.runtime.migration] Running upgrade 0002_idempotency -> 0003_reservation, Track outstanding inventory reservations for safe sequential compensation.
+INFO  [alembic.runtime.migration] Running upgrade 0003_reservation -> 0004_outbox, Transactional event intents; new table has no historical backfill.
+INFO  [alembic.runtime.migration] Running upgrade 0004_outbox -> 0005_consumers, Consumer deduplication markers are committed with handler effects.
+INFO  [alembic.runtime.migration] Running upgrade 0005_consumers -> 0006_replay, Store full failed-event identifiers and portable replay status.
+INFO  [alembic.runtime.migration] Running upgrade 0006_replay -> 0007_tenancy, Tenant ownership and catalog backfill, without changing native enums.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0007_tenancy -> 0008_key_prefix, Widen key lookup prefixes while preserving legacy hashes.
+INFO  [alembic.runtime.migration] Running upgrade 0008_key_prefix -> 0009_timeline, Persist order timeline; legacy rows are synthetic observations, not invented history.
+INFO  [alembic.runtime.migration] Running upgrade 0009_timeline -> 0010_payment_config, Encrypted tenant-owned payment settings; native enums are unchanged.
+INFO  [alembic.runtime.migration] Running upgrade 0010_payment_config -> 0011_sessions, Portable payment session state, preserving all native enum labels.
+INFO  [alembic.runtime.migration] Running upgrade 0011_sessions -> 0012_inbound, Durable verified inbound payment receipts, without changing native enums.
+INFO  [alembic.runtime.migration] Running upgrade 0012_inbound -> 0013_refunds, Durable refund requests required by captured-payment compensation.
+INFO  [alembic.runtime.migration] Running upgrade 0013_refunds -> 0014_refund_claims, Recoverable refund claims protect provider calls without holding row locks.
+INFO  [alembic.runtime.migration] Running upgrade 0014_refund_claims -> 0015_tenant_receipts, Scope inbound deduplication to the seller without deleting receipt history.
+INFO  [alembic.runtime.migration] Running upgrade 0015_tenant_receipts -> 0016_expiry_index, Index the global bounded expiry scan without changing financial rows/enums.
+INFO  [alembic.runtime.migration] Running upgrade 0016_expiry_index -> 0017_payment_polling, Durable payment polling claims; no changes to native lifecycle enums.
+INFO  [alembic.runtime.migration] Running upgrade 0017_payment_polling -> 0018_manual_shipping, Manual shipping metadata; retain legacy widths and native enums.
+INFO  [alembic.runtime.migration] Running upgrade 0018_manual_shipping -> 0019_outbound_webhooks, Tenant webhook subscriptions and durable leased deliveries; portable strings.
+INFO  [alembic.runtime.migration] Running upgrade 0019_outbound_webhooks -> 0020_notifications, Durable notification intents; portable statuses and opt-out setting.
+INFO  [alembic.runtime.migration] Running upgrade 0020_notifications -> 0021_public_tracking, Revocable public tracking versions; no native enum changes.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 0021_public_tracking -> 0020_notifications, Revocable public tracking versions; no native enum changes.
+INFO  [alembic.runtime.migration] Running downgrade 0020_notifications -> 0019_outbound_webhooks, Durable notification intents; portable statuses and opt-out setting.
+INFO  [alembic.runtime.migration] Running downgrade 0019_outbound_webhooks -> 0018_manual_shipping, Tenant webhook subscriptions and durable leased deliveries; portable strings.
+INFO  [alembic.runtime.migration] Running downgrade 0018_manual_shipping -> 0017_payment_polling, Manual shipping metadata; retain legacy widths and native enums.
+INFO  [alembic.runtime.migration] Running downgrade 0017_payment_polling -> 0016_expiry_index, Durable payment polling claims; no changes to native lifecycle enums.
+INFO  [alembic.runtime.migration] Running downgrade 0016_expiry_index -> 0015_tenant_receipts, Index the global bounded expiry scan without changing financial rows/enums.
+INFO  [alembic.runtime.migration] Running downgrade 0015_tenant_receipts -> 0014_refund_claims, Scope inbound deduplication to the seller without deleting receipt history.
+INFO  [alembic.runtime.migration] Running downgrade 0014_refund_claims -> 0013_refunds, Recoverable refund claims protect provider calls without holding row locks.
+INFO  [alembic.runtime.migration] Running downgrade 0013_refunds -> 0012_inbound, Durable refund requests required by captured-payment compensation.
+INFO  [alembic.runtime.migration] Running downgrade 0012_inbound -> 0011_sessions, Durable verified inbound payment receipts, without changing native enums.
+INFO  [alembic.runtime.migration] Running downgrade 0011_sessions -> 0010_payment_config, Portable payment session state, preserving all native enum labels.
+INFO  [alembic.runtime.migration] Running downgrade 0010_payment_config -> 0009_timeline, Encrypted tenant-owned payment settings; native enums are unchanged.
+INFO  [alembic.runtime.migration] Running downgrade 0009_timeline -> 0008_key_prefix, Persist order timeline; legacy rows are synthetic observations, not invented history.
+INFO  [alembic.runtime.migration] Running downgrade 0008_key_prefix -> 0007_tenancy, Widen key lookup prefixes while preserving legacy hashes.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0007_tenancy -> 0008_key_prefix, Widen key lookup prefixes while preserving legacy hashes.
+INFO  [alembic.runtime.migration] Running upgrade 0008_key_prefix -> 0009_timeline, Persist order timeline; legacy rows are synthetic observations, not invented history.
+INFO  [alembic.runtime.migration] Running upgrade 0009_timeline -> 0010_payment_config, Encrypted tenant-owned payment settings; native enums are unchanged.
+INFO  [alembic.runtime.migration] Running upgrade 0010_payment_config -> 0011_sessions, Portable payment session state, preserving all native enum labels.
+INFO  [alembic.runtime.migration] Running upgrade 0011_sessions -> 0012_inbound, Durable verified inbound payment receipts, without changing native enums.
+INFO  [alembic.runtime.migration] Running upgrade 0012_inbound -> 0013_refunds, Durable refund requests required by captured-payment compensation.
+INFO  [alembic.runtime.migration] Running upgrade 0013_refunds -> 0014_refund_claims, Recoverable refund claims protect provider calls without holding row locks.
+INFO  [alembic.runtime.migration] Running upgrade 0014_refund_claims -> 0015_tenant_receipts, Scope inbound deduplication to the seller without deleting receipt history.
+INFO  [alembic.runtime.migration] Running upgrade 0015_tenant_receipts -> 0016_expiry_index, Index the global bounded expiry scan without changing financial rows/enums.
+INFO  [alembic.runtime.migration] Running upgrade 0016_expiry_index -> 0017_payment_polling, Durable payment polling claims; no changes to native lifecycle enums.
+INFO  [alembic.runtime.migration] Running upgrade 0017_payment_polling -> 0018_manual_shipping, Manual shipping metadata; retain legacy widths and native enums.
+INFO  [alembic.runtime.migration] Running upgrade 0018_manual_shipping -> 0019_outbound_webhooks, Tenant webhook subscriptions and durable leased deliveries; portable strings.
+INFO  [alembic.runtime.migration] Running upgrade 0019_outbound_webhooks -> 0020_notifications, Durable notification intents; portable statuses and opt-out setting.
+INFO  [alembic.runtime.migration] Running upgrade 0020_notifications -> 0021_public_tracking, Revocable public tracking versions; no native enum changes.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 0021_public_tracking -> 0020_notifications, Revocable public tracking versions; no native enum changes.
+INFO  [alembic.runtime.migration] Running downgrade 0020_notifications -> 0019_outbound_webhooks, Durable notification intents; portable statuses and opt-out setting.
+INFO  [alembic.runtime.migration] Running downgrade 0019_outbound_webhooks -> 0018_manual_shipping, Tenant webhook subscriptions and durable leased deliveries; portable strings.
+INFO  [alembic.runtime.migration] Running downgrade 0018_manual_shipping -> 0017_payment_polling, Manual shipping metadata; retain legacy widths and native enums.
+INFO  [alembic.runtime.migration] Running downgrade 0017_payment_polling -> 0016_expiry_index, Durable payment polling claims; no changes to native lifecycle enums.
+0007->HEAD->0007->HEAD: LEGACY ORDER/PAYMENT/ITEM/INVENTORY/PREFIX/HASH AND NATIVE ENUM LABELS PRESERVED
+OPERATIONAL CHECKPOINT DOWNGRADE REFUSAL: BEFORE DATA LOSS; FINANCIAL SNAPSHOT UNCHANGED
+.
+1 passed in 7.21s

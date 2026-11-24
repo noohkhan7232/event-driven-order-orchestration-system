@@ -9,11 +9,12 @@ durable deduplication and state guards, and compensation releases stock and jour
 asynchronous refunds. Provider HTTP, seller webhook HTTP and SMTP run outside
 database transactions holding row locks.
 
-Implemented through Phase 3B.12: per-tenant Razorpay integration, mock payments,
+Phase 3B implements per-tenant Razorpay integration, mock payments,
 COD, expiry/reconciliation, manual shipping, signed seller webhooks, notifications,
 revocable public tracking, SSE and owner/platform failed-job recovery APIs.
-The full Phase 3B Docker acceptance run (3B.13), live provider money flows, hosted
-CI execution and production deployment remain unverified. See the
+The Docker acceptance runner below covers all specified Phase 3B experiments.
+Live provider money flows, external SMTP/TLS, hosted CI execution and production
+deployment remain unverified. See observed results in the
 [current architecture and verification report](docs/reports/phase-3b-report.md).
 
 ```mermaid
@@ -404,8 +405,30 @@ Tests never call real external providers; PostgreSQL/Redis tests use local test
 services. Coverage omits tests and enforces≥90% overall and per required new module.
 CI has SQLite and PostgreSQL+Redis jobs; this is configuration, not a claim that
 hosted CI ran. The OpenAPI freshness test compares the artifact with current routes.
-Full Docker E1–E30 acceptance, including SSE/failed-job experiments, remains3B.13;
-the current `scripts/e2e_integrations.py` covers the reviewed Part1 subset.
+
+The complete Docker acceptance entrypoint runs E1–E20 and E22–E30, plus retained
+reliability controls. E21 is not specified in the Phase 3B acceptance list. It uses
+the real API, PostgreSQL, RabbitMQ, Redis, worker, scheduler, relay, Mailpit and sink;
+remote payment-provider sessions are synthetic. It recreates services with proof
+settings, uses isolated quota counters, then verifies restored application defaults.
+Unique order/financial/audit fixtures and existing volumes remain. Temporary
+encrypted webhook endpoint/delivery fixtures are removed before retiring their key.
+The temporary platform principal uses a random credential and is disabled on cleanup;
+its audit identity remains intact.
+
+```powershell
+docker compose build
+# If Windows blocks the default host SMTP port1025, select an available host port:
+$env:MAILPIT_SMTP_PORT='11025'
+.venv\Scripts\python scripts/e2e_integrations.py
+# Optional diagnostic rerun; use the complete entrypoint for acceptance:
+.venv\Scripts\python scripts/e2e_integrations.py --section sellers --seller-case E27
+```
+
+Only one acceptance runner should reconfigure the stack at a time. Container SMTP
+stays `mailpit:1025`. If changing dev-tools UI ports, set `E2E_MAILPIT_URL` and
+`E2E_SINK_URL` to the matching host URLs; API requests use `API_PORT` or
+`E2E_BASE_URL`. See the report for the legacy-data roundtrip command and raw output.
 
 ## Limits and references
 

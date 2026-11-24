@@ -1,4 +1,4 @@
-"""Full Part 1 Docker acceptance, with targeted --section reruns.
+"""Full Phase 3B Docker acceptance, with targeted --section reruns.
 
     Uses unique fixture data and isolated Redis quotas; restores base runtime values
 and preserves volumes. Razorpay HTTP ingestion uses dummy session fixtures only.
@@ -102,9 +102,15 @@ def session_cod() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Part 1 Docker acceptance; preserves existing volumes/data")
-    parser.add_argument("--section", choices=("all", "legacy", "payments", "abuse", "sessions"), default="all")
-    section = parser.parse_args().section
+    parser = argparse.ArgumentParser(description="Phase 3B Docker acceptance; preserves existing volumes/data")
+    parser.add_argument(
+        "--section", choices=("all", "legacy", "payments", "abuse", "sessions", "sellers"), default="all"
+    )
+    parser.add_argument(
+        "--seller-case", choices=("all", "E19", "E22", "E23", "E24", "E25", "E26", "E27", "E29"), default="all"
+    )
+    arguments = parser.parse_args()
+    section = arguments.section
     root = Path(__file__).resolve().parents[1]
     override = root / (".coverage-part1-compose-" + uuid4().hex + ".yaml")
     names = ("COMPOSE_FILE", "COMPOSE_PATH_SEPARATOR", "FAILURE_INJECTION_ENABLED", "E2E_RATE_BACKEND_URL")
@@ -156,6 +162,13 @@ def main() -> None:
                 failures.append(filename)
         if section in {"all", "sessions"}:
             session_cod()
+        if section in {"all", "sellers"}:
+            result = subprocess.run(  # noqa: S603
+                [sys.executable, str(root / "scripts/e2e_seller_integrations.py"), "--case", arguments.seller_case],
+                check=False,
+            )
+            if result.returncode:
+                failures.append("e2e_seller_integrations.py")
     finally:
         for name, value in original.items():
             if value is None:
@@ -182,7 +195,13 @@ def main() -> None:
                     "'failure_injection':s.failure_injection_enabled,"
                     "'shared_rate_backend':bool(s.rate_limit_redis_url),"
                     "'rate_backend_is_default':s.rate_limit_redis_url=='redis://redis:6379/2',"
-                    "'encryption_configured':s.credentials_encryption_key is not None}))",
+                    "'encryption_configured':s.credentials_encryption_key is not None,"
+                    "'notifications_backend':s.notifications_backend,"
+                    "'webhook_insecure':s.webhook_allow_insecure_targets,"
+                    "'webhook_attempts':s.webhook_max_attempts,'webhook_interval':s.webhook_delivery_interval_seconds,"
+                    "'notification_interval':s.notification_interval_seconds,"
+                    "'stream_max':s.sse_max_seconds,'stream_poll':s.sse_poll_seconds,"
+                    "'stream_lookback':s.sse_lookback_seconds,'tracking_limit':s.rate_limit_tracking_limit}))",
                 )
                 values = json.loads(runtime)
                 require(
@@ -199,8 +218,17 @@ def main() -> None:
                         "shared_rate_backend": True,
                         "rate_backend_is_default": True,
                         "encryption_configured": False,
+                        "notifications_backend": "console",
+                        "webhook_insecure": False,
+                        "webhook_attempts": 8,
+                        "webhook_interval": 10,
+                        "notification_interval": 10,
+                        "stream_max": 300,
+                        "stream_poll": 1,
+                        "stream_lookback": 5,
+                        "tracking_limit": 60,
                     },
-                    "Part 1 defaults not restored",
+                    "Phase 3B defaults not restored",
                 )
                 print("RESTORED " + service + " " + runtime, flush=True)
         finally:
@@ -218,7 +246,7 @@ def main() -> None:
         require(rate_service not in restored, "Temporary quota service was not removed")
         print(restored, flush=True)
     require(not failures, "Failed acceptance scripts: " + ",".join(failures))
-    print("PASS selected Part 1 acceptance section: " + section, flush=True)
+    print("PASS selected Phase 3B acceptance section: " + section, flush=True)
 
 
 if __name__ == "__main__":
