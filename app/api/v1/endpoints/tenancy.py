@@ -6,12 +6,25 @@ from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal, get_principal
 from app.core.config import Settings, get_settings
+from app.core.exceptions import AuthorizationError
 from app.db.session import get_db
-from app.models.entities import ApiKey
+from app.models.entities import ApiKey, Tenant
+from app.models.enums import UserRole
 from app.schemas.tenancy import ApiKeyCreate, ApiKeyCreated, ApiKeyRead, TenantRead, TenantRegister
 from app.services.tenancy import create_api_key, register_tenant, revoke_api_key
 
 router = APIRouter()
+
+
+@router.get("/tenants/me", response_model=TenantRead)
+def own_tenant(principal: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    if (
+        not principal.user
+        or principal.tenant_id is None
+        or principal.user.role not in {UserRole.ADMIN, UserRole.VENDOR}
+    ):
+        raise AuthorizationError("Tenant staff JWT required")
+    return db.get(Tenant, principal.tenant_id)
 
 
 @router.post("/tenants/register", response_model=TenantRead, status_code=201)
