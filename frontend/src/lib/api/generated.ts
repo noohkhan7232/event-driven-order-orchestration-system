@@ -411,6 +411,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orders/{order_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Order Activity */
+        get: operations["order_activity_api_v1_orders__order_id__activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orders/{order_id}/cancel": {
         parameters: {
             query?: never;
@@ -831,6 +848,18 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ActivityEvent */
+        ActivityEvent: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+        };
         /** ApiKeyCreate */
         ApiKeyCreate: {
             /** Expires At */
@@ -1105,6 +1134,17 @@ export interface components {
             /** Notifications Enabled */
             notifications_enabled: boolean;
         };
+        /** OrderActivity */
+        OrderActivity: {
+            /** Payments */
+            payments: components["schemas"]["PaymentActivity"][];
+            /** Refunds */
+            refunds: components["schemas"]["RefundActivity"][];
+            /** Shipments */
+            shipments: components["schemas"]["ShipmentActivity"][];
+            /** Timeline */
+            timeline: components["schemas"]["ActivityEvent"][];
+        };
         /** OrderCreate */
         OrderCreate: {
             /** Buyer Email */
@@ -1260,6 +1300,20 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** PaymentActivity */
+        PaymentActivity: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Id */
+            id: string;
+            /** Provider Status */
+            provider_status: string | null;
+            /** Status */
+            status: string;
+        };
         /** PaymentConfigRead */
         PaymentConfigRead: {
             /** Active */
@@ -1359,6 +1413,22 @@ export interface components {
             /** Price */
             price?: number | string | null;
         };
+        /** RefundActivity */
+        RefundActivity: {
+            /** Amount */
+            amount: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Currency */
+            currency: string;
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+        };
         /** ReplayAccepted */
         ReplayAccepted: {
             /**
@@ -1377,6 +1447,23 @@ export interface components {
              * @constant
              */
             status: "replayed";
+        };
+        /** ShipmentActivity */
+        ShipmentActivity: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Id */
+            id: string;
+            /**
+             * Shipment Id
+             * Format: uuid
+             */
+            shipment_id: string;
+            /** Status */
+            status: string;
         };
         /** ShipmentEventCreate */
         ShipmentEventCreate: {
@@ -2498,6 +2585,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrderRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    order_activity_api_v1_orders__order_id__activity_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "x-api-key"?: string | null;
+            };
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderActivity"];
                 };
             };
             /** @description Validation Error */

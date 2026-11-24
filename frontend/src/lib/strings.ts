@@ -1,4 +1,122 @@
 export const strings = {
+  orders: {
+    title: "Orders",
+    hint: "Follow each order from confirmation to delivery.",
+    create: "Create test order",
+    search: "Order ID or external reference",
+    status: "Status",
+    from: "From date",
+    to: "To date",
+    apply: "Apply filters",
+    all: "All statuses",
+    live: "Live",
+    polling: "Reconnecting · refreshing every 15 seconds",
+    reference: "External reference",
+    total: "Total",
+    previous: "Previous",
+    next: "Next",
+    page: (offset: number, total: number) =>
+      `${offset + 1}–${Math.min(offset + 20, total)} of ${total}`,
+    empty: "No orders match these filters.",
+    detail: "Order details",
+    buyer: "Buyer",
+    items: "Items",
+    sku: "SKU",
+    quantity: "Quantity",
+    payment: "Payment",
+    prepaid: "Prepaid",
+    cod: "Cash on delivery",
+    cancel: "Cancel order",
+    confirm: "Confirm",
+    dismiss: "Back",
+    reason: "Reason",
+    cancelHint:
+      "Cancellation releases reserved stock and requests any required refund. This cannot be undone.",
+    timeline: "Order journey",
+    historyEmpty: "No recorded events yet.",
+    refunds: "Refunds",
+    shipment: "Shipment",
+    tracking: "Edit tracking",
+    carrier: "Carrier",
+    number: "Tracking number",
+    url: "Carrier tracking URL",
+    eta: "Estimated delivery",
+    save: "Save",
+    event: "Add shipment event",
+    location: "Location (optional)",
+    notes: "Notes (optional)",
+    rotate: "Rotate tracking link",
+    rotateHint: "The previous buyer link will immediately stop working.",
+    copy: "Copy tracking URL",
+    copied: "Tracking URL copied.",
+    copyFailed: "Could not copy. Select and copy the displayed link.",
+    name: "Buyer name (optional)",
+    email: "Buyer email (optional)",
+    phone: "Buyer phone (optional)",
+    addItem: "Add item",
+    remove: "Remove item",
+    submitted: "Order accepted. Processing continues in the background.",
+    expires: (seconds: number) =>
+      seconds > 0
+        ? `Payment window: ${seconds}s remaining`
+        : "Payment window ended; awaiting the final provider outcome.",
+    pendingAction: "Updating…",
+    notFound: "Order not found",
+    refresh: "Refresh",
+    confirmation: "Review and confirm this change.",
+    currency: "Currency",
+    unknown: "Not provided",
+    provider: "Provider",
+    history: "Recorded activity",
+    unitPrice: "Unit price",
+    invalidDate: "End date must be on or after start date.",
+    testHint:
+      "This creates a real order in your store. Use test SKUs and mock payments for experiments.",
+  },
+  statuses: {
+    collected: "Collected",
+    pending_collection: "Awaiting cash collection",
+    creating: "Creating payment",
+    abandoned: "Abandoned",
+    created: "Received",
+    validated: "Validated",
+    inventory_reserved: "Stock reserved",
+    payment_pending: "Awaiting payment",
+    paid: "Paid",
+    fulfillment_requested: "Preparing shipment",
+    shipped: "Shipped",
+    delivered: "Delivered",
+    cancelled: "Cancelled",
+    failed: "Failed",
+    pending: "Pending",
+    in_transit: "Shipped / in transit",
+    delayed: "Delayed",
+    initiated: "Initiated",
+    authorized: "Authorized",
+    captured: "Captured",
+    refunded: "Refunded",
+    requested: "Requested",
+    processing: "Processing",
+    succeeded: "Succeeded",
+  } as Record<string, string>,
+  failures: {
+    INSUFFICIENT_INVENTORY:
+      "There was not enough available stock. The order could not proceed.",
+    PAYMENT_DECLINED: "Payment was declined. Reserved stock is released.",
+    PAYMENT_FAILED: "Payment failed. Reserved stock is released.",
+    SHIPMENT_FAILED:
+      "Shipment creation failed. Stock is released and any captured payment is queued for refund.",
+    RETRIES_EXHAUSTED:
+      "Processing could not finish after retries. Your store owner can review the failed job.",
+    PAYMENT_EXPIRED:
+      "Payment was not confirmed within the payment window. Stock is released.",
+    LATE_PAYMENT:
+      "Payment arrived after the allowed window. A refund is requested.",
+    AMOUNT_MISMATCH:
+      "The payment amount did not match this order. A refund is requested.",
+    unknown:
+      "The order could not complete. Review its payment, refund and shipment status before taking action.",
+  } as Record<string, string>,
   dismiss: "Dismiss notice",
 
   brand: "Order Desk",
@@ -91,6 +209,7 @@ export const strings = {
 
   validation: {
     required: "Please complete this field.",
+    phone: "Enter a valid phone number.",
 
     email: "Enter a valid email address.",
 
@@ -122,6 +241,14 @@ export const strings = {
   },
 
   errors: {
+    not_found: "This record was not found.",
+    conflict:
+      "This change conflicts with the current record. Refresh and try again.",
+    invalid_order_transition:
+      "The order has moved on. Refresh before trying again.",
+    idempotency_key_conflict:
+      "This request key was already used for different order details.",
+    insufficient_inventory: "There is not enough available stock.",
     unauthenticated: "Your session has ended. Please sign in.",
 
     forbidden: "Check your email and password, or contact your store owner.",

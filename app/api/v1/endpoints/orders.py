@@ -2,19 +2,65 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal, aware, get_principal
 from app.core.exceptions import AuthorizationError
 from app.db.session import get_db
-from app.models.entities import AuditLog
+from app.models.entities import AuditLog, OrderTimeline, Refund
 from app.models.enums import OrderStatus
 from app.repositories.orders import OrderRepository
 from app.schemas.common import Page
-from app.schemas.orders import OrderCreate, OrderRead
+from app.schemas.orders import (
+    ActivityEvent,
+    OrderActivity,
+    OrderCreate,
+    OrderRead,
+    PaymentActivity,
+    RefundActivity,
+    ShipmentActivity,
+)
 from app.services.orders import OrderService
 
 router = APIRouter()
+
+
+@router.get("/{order_id}/activity", response_model=OrderActivity)
+def order_activity(order_id: UUID, db: Session = Depends(get_db), user: Principal = Depends(get_principal)):
+    order = OrderService(db).get_order(order_id, user)
+    if user.is_customer:
+        raise AuthorizationError("Staff or integration credentials required")
+    timeline = db.scalars(
+        select(OrderTimeline)
+        .where(OrderTimeline.order_id == order.id, OrderTimeline.tenant_id == user.tenant_id)
+        .order_by(OrderTimeline.id)
+    )
+    refunds = db.scalars(
+        select(Refund)
+        .where(Refund.order_id == order.id, Refund.tenant_id == user.tenant_id)
+        .order_by(Refund.created_at, Refund.id)
+    )
+    return OrderActivity(
+        timeline=[ActivityEvent(id=str(row.id), at=row.created_at, status=row.to_status) for row in timeline],
+        payments=[
+            PaymentActivity(
+                id=str(row.id), at=row.updated_at, status=row.status.value, provider_status=row.provider_status
+            )
+            for row in order.payments
+        ],
+        shipments=[
+            ShipmentActivity(id=str(event.id), shipment_id=row.id, at=event.created_at, status=event.status.value)
+            for row in order.shipments
+            for event in sorted(row.events, key=lambda e: (e.created_at, e.id))
+        ],
+        refunds=[
+            RefundActivity(
+                id=str(row.id), at=row.updated_at, status=row.status, amount=row.amount, currency=row.currency
+            )
+            for row in refunds
+        ],
+    )
 
 
 @router.post("/{order_id}/tracking/rotate")

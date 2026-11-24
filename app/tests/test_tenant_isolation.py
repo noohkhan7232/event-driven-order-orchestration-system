@@ -66,6 +66,7 @@ def test_tenant_resource_isolation_matrix(client, db, role):
     else:
         headers = {"Authorization": f"Bearer {AuthService(db).login(other.email, 'strong-password')}"}
     assert client.get(f"/api/v1/orders/{order.id}", headers=headers).status_code == 404
+    assert client.get(f"/api/v1/orders/{order.id}/activity", headers=headers).status_code == 404
     assert client.get(f"/api/v1/orders/stream?order_id={order.id}", headers=headers).status_code == 404
     from app.models.entities import FailedJob
 
@@ -234,6 +235,7 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/orders"),
         ("POST", "/api/v1/orders"),
         ("GET", "/api/v1/orders/{order_id}"),
+        ("GET", "/api/v1/orders/{order_id}/activity"),
         ("POST", "/api/v1/orders/{order_id}/cancel"),
         ("GET", "/api/v1/inventory"),
         ("POST", "/api/v1/inventory"),

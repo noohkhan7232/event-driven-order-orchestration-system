@@ -87,3 +87,29 @@ input[aria-invalid="true"] {
     scroll-behavior: auto !important;
   }
 }
+
+select,
+textarea {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #64748b;
+  background: white;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.panel {
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  background: white;
+  padding: 20px;
+  min-width: 0;
+}
+.section-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+input[type="checkbox"] {
+  width: 20px;
+  min-height: 20px;
+}
