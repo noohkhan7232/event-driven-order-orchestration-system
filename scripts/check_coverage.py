@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 MODULES = (
+    "app/core/integration_guard.py",
     "app/providers/manual.py",
     "app/services/shipping.py",
     "app/api/v1/endpoints/shipments.py",

@@ -104,10 +104,12 @@ def session_cod() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase 3B Docker acceptance; preserves existing volumes/data")
     parser.add_argument(
-        "--section", choices=("all", "legacy", "payments", "abuse", "sessions", "sellers"), default="all"
+        "--section", choices=("all", "legacy", "payments", "abuse", "sessions", "sellers", "hardening"), default="all"
     )
     parser.add_argument(
-        "--seller-case", choices=("all", "E19", "E22", "E23", "E24", "E25", "E26", "E27", "E29"), default="all"
+        "--seller-case",
+        choices=("all", "hardening", "E19", "E22", "E23", "E24", "E25", "E26", "E27", "E29"),
+        default="all",
     )
     arguments = parser.parse_args()
     section = arguments.section
@@ -147,6 +149,8 @@ def main() -> None:
     commands = []
     if section in {"all", "legacy"}:
         commands.extend(("e2e_reliability.py", "e2e_tenancy.py"))
+    if section == "hardening":
+        commands.append("e2e_reliability.py")
     if section in {"all", "payments"}:
         commands.append("e2e_payments.py")
     if section in {"all", "abuse"}:
@@ -157,14 +161,22 @@ def main() -> None:
         compose("up", "-d", "--no-build", "--wait", rate_service)
         print("ISOLATED Redis HTTP quotas; normal quota counters and all data volumes preserved", flush=True)
         for filename in commands:
-            result = subprocess.run([sys.executable, str(root / "scripts" / filename)], check=False)  # noqa: S603
+            arguments_for_script = [sys.executable, str(root / "scripts" / filename)]
+            if section == "hardening":
+                arguments_for_script.append("--smoke")
+            result = subprocess.run(arguments_for_script, check=False)  # noqa: S603
             if result.returncode:
                 failures.append(filename)
         if section in {"all", "sessions"}:
             session_cod()
-        if section in {"all", "sellers"}:
+        if section in {"all", "sellers", "hardening"}:
             result = subprocess.run(  # noqa: S603
-                [sys.executable, str(root / "scripts/e2e_seller_integrations.py"), "--case", arguments.seller_case],
+                [
+                    sys.executable,
+                    str(root / "scripts/e2e_seller_integrations.py"),
+                    "--case",
+                    "hardening" if section == "hardening" else arguments.seller_case,
+                ],
                 check=False,
             )
             if result.returncode:
@@ -179,7 +191,8 @@ def main() -> None:
             os.environ["FAILURE_INJECTION_ENABLED"] = "false"
             compose("up", "-d", "--no-build")
             worker_ready()
-            for service in ("api", "worker", "scheduler"):
+            worker_ready(service="integrations-worker")
+            for service in ("api", "worker", "scheduler", "integrations-worker"):
                 runtime = compose(
                     "exec",
                     "-T",
@@ -199,6 +212,8 @@ def main() -> None:
                     "'notifications_backend':s.notifications_backend,"
                     "'webhook_insecure':s.webhook_allow_insecure_targets,"
                     "'webhook_attempts':s.webhook_max_attempts,'webhook_interval':s.webhook_delivery_interval_seconds,"
+                    "'webhook_total_timeout':s.webhook_total_timeout_seconds,"
+                    "'webhook_batch_budget':s.webhook_batch_budget_seconds,"
                     "'notification_interval':s.notification_interval_seconds,"
                     "'stream_max':s.sse_max_seconds,'stream_poll':s.sse_poll_seconds,"
                     "'stream_lookback':s.sse_lookback_seconds,'tracking_limit':s.rate_limit_tracking_limit}))",
@@ -222,6 +237,8 @@ def main() -> None:
                         "webhook_insecure": False,
                         "webhook_attempts": 8,
                         "webhook_interval": 10,
+                        "webhook_total_timeout": 15,
+                        "webhook_batch_budget": 45,
                         "notification_interval": 10,
                         "stream_max": 300,
                         "stream_poll": 1,

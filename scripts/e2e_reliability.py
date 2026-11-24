@@ -5,6 +5,7 @@ Only this project's worker, relay and RabbitMQ are stopped/restarted; no volumes
 or existing data are deleted. Every failed assertion makes the runner exit 1.
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -53,20 +54,31 @@ def compose(*args: str) -> str:
     return result.stdout.strip()
 
 
-def worker_ready(timeout: float = 90) -> None:
+def worker_ready(timeout: float = 90, service: str = "worker") -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
+            hostname = compose("exec", "-T", service, "python", "-c", "import socket; print(socket.gethostname())")
+            prefix = "integrations" if service == "integrations-worker" else "celery"
             reply = compose(
-                "exec", "-T", "worker", "celery", "-A", "app.workers.celery_app", "inspect", "ping", "--timeout=3"
+                "exec",
+                "-T",
+                service,
+                "celery",
+                "-A",
+                "app.workers.celery_app",
+                "inspect",
+                "ping",
+                "--timeout=3",
+                "--destination=" + prefix + "@" + hostname,
             )
             if "pong" in reply:
                 return
         except RuntimeError:
-            if "worker" in compose("ps", "--status", "exited", "--services", "worker").splitlines():
-                compose("start", "worker")
+            if service in compose("ps", "--status", "exited", "--services", service).splitlines():
+                compose("start", service)
         time.sleep(1)
-    raise RuntimeError("Worker did not become broker-responsive")
+    raise RuntimeError(service + " did not become broker-responsive")
 
 
 class Harness:
@@ -410,6 +422,9 @@ class Harness:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--smoke", action="store_true", help="Run E1 and E8 only")
+    smoke = parser.parse_args().smoke
     os.environ["FAILURE_INJECTION_ENABLED"] = "true"
     compose("up", "-d", "--no-build")
     worker_ready()
@@ -430,6 +445,8 @@ def main() -> int:
             ("S6 exhausted retry and replay", lambda: harness.transient(True)),
             ("S10 cancellation at every requested state", harness.cancellations),
         ]
+        if smoke:
+            actions = [(name, action) for name, action in actions if name.startswith(("E1 ", "E8 "))]
         for name, action in actions:
             passed.append(experiment(name, action))
     finally:

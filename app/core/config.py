@@ -4,6 +4,10 @@ from typing import Self
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+INTEGRATION_SOFT_TIME_LIMIT = 75
+INTEGRATION_TIME_LIMIT = 90
+INTEGRATION_LOCK_SECONDS = 105
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -82,6 +86,8 @@ class Settings(BaseSettings):
     webhook_extra_allowed_ports: list[int] = Field(default_factory=list)
     webhook_max_attempts: int = Field(default=8, ge=1, le=100)
     webhook_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    webhook_total_timeout_seconds: float = Field(default=15, gt=0)
+    webhook_batch_budget_seconds: float = Field(default=45, gt=0)
     webhook_response_max_bytes: int = Field(default=1024, ge=1, le=65536)
     webhook_retry_base_seconds: float = Field(default=600, gt=0)
     webhook_retry_max_seconds: float = Field(default=43200, gt=0)
@@ -132,8 +138,12 @@ class Settings(BaseSettings):
             raise ValueError("Insecure webhook targets are forbidden outside local/development/test")
         if any(port < 1 or port > 65535 for port in self.webhook_extra_allowed_ports):
             raise ValueError("Invalid webhook port allowlist")
-        if self.webhook_lease_seconds <= self.webhook_timeout_seconds:
-            raise ValueError("Webhook lease must exceed HTTP timeout")
+        if self.webhook_total_timeout_seconds <= self.webhook_timeout_seconds:
+            raise ValueError("Webhook total timeout must exceed connect/read timeout")
+        if self.webhook_lease_seconds <= self.webhook_total_timeout_seconds:
+            raise ValueError("Webhook lease must exceed total HTTP timeout")
+        if self.webhook_batch_budget_seconds + self.webhook_total_timeout_seconds >= INTEGRATION_SOFT_TIME_LIMIT:
+            raise ValueError("Webhook batch budget plus total timeout must be below the integration soft time limit")
         if self.mock_payment_auto_complete is None:
             self.mock_payment_auto_complete = local
         if not local and self.mock_payment_auto_complete:

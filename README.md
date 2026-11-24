@@ -50,7 +50,7 @@ Swagger is at `http://localhost:18000/docs` with the override above; otherwise u
 port 8000. The live schema is `/api/v1/openapi.json`; the checked-in contract is
 [docs/openapi.json](docs/openapi.json). PostgreSQL publishes 5432, Redis 6379,
 RabbitMQ 5672 and its local management UI 15672. Choose local port overrides if
-those are reserved. The stack includes `api`, `worker`, `scheduler`, `outbox-relay`,
+those are reserved. The stack includes `api`, `worker`, `integrations-worker`, `scheduler`, `outbox-relay`,
 `migrate`, `postgres`, `redis` and `rabbitmq`.
 
 Register a seller, create priced stock, then place an order:
@@ -95,6 +95,7 @@ x-private: &private
 services:
   api: *private
   worker: *private
+  integrations-worker: *private
   scheduler: *private
   outbox-relay: *private
   migrate: *private
@@ -364,6 +365,20 @@ in the same transaction. Concurrent replay has one winner. A second replay retur
 preserves the original identity. Invalid poison payloads are safe conflicts.
 
 ## Development and quality checks
+
+Outbound HTTP uses a cancellable total deadline (`WEBHOOK_TOTAL_TIMEOUT_SECONDS=15`)
+across connect/TLS/write/response headers/body; the connect/read timeout remains5s.
+`WEBHOOK_BATCH_BUDGET_SECONDS=45` stops new claims, allowing the current send to finish.
+Both poller tasks have75s soft/90s hard Celery limits. `integrations-worker` alone
+consumes `integrations`, with `INTEGRATIONS_WORKER_CONCURRENCY=2`; the saga worker
+keeps its order/inventory/payment/shipment/dead-letter queues. Beat routes explicitly.
+Per-task overlap guards use nonblocking Redis locks when `REDIS_URL` is nonempty,
+with105s TTL beyond the hard limit and owner-checked release. With empty `REDIS_URL`,
+PostgreSQL session advisory locks run on an autocommit connection without row locks;
+SQLite uses a process lock for local tests. Failed Redis admission claims no work.
+The integrations service has100s shutdown grace. For focused real Docker verification:
+`python scripts/e2e_integrations.py --section hardening` runs E1/E8/E22–E25/E27 and
+restores all four application services' runtime settings.
 
 ```powershell
 python -m venv .venv

@@ -5,8 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import INTEGRATION_SOFT_TIME_LIMIT, INTEGRATION_TIME_LIMIT, get_settings
 from app.core.exceptions import BusinessError, InsufficientInventoryError, TransientError
+from app.core.integration_guard import integration_run
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.domain.order_state import transition
@@ -302,11 +303,23 @@ def reconcile_pending_payments() -> dict[str, int]:
     return reconcile_payments(SessionLocal)
 
 
-@celery_app.task(name="app.workers.tasks.deliver_webhooks")
+@celery_app.task(
+    name="app.workers.tasks.deliver_webhooks",
+    soft_time_limit=INTEGRATION_SOFT_TIME_LIMIT,
+    time_limit=INTEGRATION_TIME_LIMIT,
+)
 def deliver_webhooks() -> dict[str, int]:
-    return run_delivery_batch(SessionLocal, get_settings())
+    settings = get_settings()
+    with integration_run(SessionLocal, settings, "deliver_webhooks") as acquired:
+        return run_delivery_batch(SessionLocal, settings) if acquired else {}
 
 
-@celery_app.task(name="app.workers.tasks.send_notifications")
+@celery_app.task(
+    name="app.workers.tasks.send_notifications",
+    soft_time_limit=INTEGRATION_SOFT_TIME_LIMIT,
+    time_limit=INTEGRATION_TIME_LIMIT,
+)
 def send_notifications() -> dict[str, int]:
-    return run_notifications(SessionLocal, get_settings())
+    settings = get_settings()
+    with integration_run(SessionLocal, settings, "send_notifications") as acquired:
+        return run_notifications(SessionLocal, settings) if acquired else {}

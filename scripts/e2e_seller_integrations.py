@@ -333,8 +333,8 @@ class SellerHarness(Harness):
         email = f"p13-happy-{self.run_id}@example.com"
         identity = self.place(self.seed("email"), email=email)
         self.reach(identity, "fulfillment_requested")
-        compose("restart", "worker")
-        worker_ready()
+        compose("restart", "integrations-worker")
+        worker_ready(service="integrations-worker")
         self.ship(identity)
         self.delivered(identity)
         self.notification_check(
@@ -385,7 +385,7 @@ class SellerHarness(Harness):
         compose(
             "exec",
             "-T",
-            "worker",
+            "integrations-worker",
             "python",
             "-c",
             "from app.workers.tasks import send_notifications; send_notifications.delay(); send_notifications.delay()",
@@ -640,8 +640,15 @@ class SellerHarness(Harness):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=("all", *CASES), default="all")
+    parser.add_argument("--case", choices=("all", "hardening", *CASES), default="all")
     selected = parser.parse_args().case
+    chosen = (
+        set(CASES)
+        if selected == "all"
+        else {"E22", "E23", "E24", "E25", "E27"}
+        if selected == "hardening"
+        else {selected}
+    )
     require(
         bool(os.environ.get("E2E_RATE_BACKEND_URL")), "Use e2e_integrations.py --section sellers for isolated quotas"
     )
@@ -674,7 +681,14 @@ def main() -> None:
     def configure(**changes: str) -> None:
         settings.update(changes)
         override.write_text(
-            json.dumps({"services": {name: {"environment": settings} for name in ("api", "worker", "scheduler")}}),
+            json.dumps(
+                {
+                    "services": {
+                        name: {"environment": settings}
+                        for name in ("api", "worker", "scheduler", "integrations-worker")
+                    }
+                }
+            ),
             encoding="utf-8",
         )
         compose(
@@ -690,14 +704,16 @@ def main() -> None:
             "api",
             "worker",
             "scheduler",
+            "integrations-worker",
             "mailpit",
             "webhook-sink",
         )
         wait(lambda: healthy(harness), "API ready")
         worker_ready()
+        worker_ready(service="integrations-worker")
 
     def run(name: str, action: Callable[[], str]) -> None:
-        if selected in {"all", name}:
+        if name in chosen:
             require(experiment(name, action), "Failed seller experiment " + name)
 
     try:
@@ -707,12 +723,12 @@ def main() -> None:
         run("E19", harness.shipping)
         run("E22", harness.outbound)
         run("E23", harness.retries)
-        if selected in {"all", "E24"}:
+        if "E24" in chosen:
             configure(WEBHOOK_ALLOW_INSECURE_TARGETS="false")
             run("E24", harness.ssrf)
             configure(WEBHOOK_ALLOW_INSECURE_TARGETS="true")
         run("E25", harness.notifications)
-        if selected in {"all", "E26"}:
+        if "E26" in chosen:
             configure(RATE_LIMIT_TRACKING_LIMIT="3")
             run("E26", harness.tracking)
             configure(RATE_LIMIT_TRACKING_LIMIT="60")
@@ -724,8 +740,9 @@ def main() -> None:
             foreign.cleanup()
         finally:
             try:
-                compose("up", "-d", "--no-build", "api", "worker", "scheduler")
+                compose("up", "-d", "--no-build", "api", "worker", "scheduler", "integrations-worker")
                 worker_ready()
+                worker_ready(service="integrations-worker")
             finally:
                 override.unlink(missing_ok=True)
 

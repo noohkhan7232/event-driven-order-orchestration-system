@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 from concurrent.futures import ThreadPoolExecutor
@@ -25,7 +26,7 @@ def test_postgres_webhook_skip_locked_and_http_holds_no_tenant_endpoint_delivery
     identity = ping(client, auth, endpoint)
     claiming, commit_release, sending, send_release = Event(), Event(), Event(), Event()
     original_commit = TestingSessionLocal.class_.commit
-    original_client = httpx.Client
+    original_client = httpx.AsyncClient
     calls = []
 
     def before_commit(session):
@@ -34,7 +35,7 @@ def test_postgres_webhook_skip_locked_and_http_holds_no_tenant_endpoint_delivery
             assert commit_release.wait(15)
         return original_commit(session)
 
-    def receiver(request):
+    async def receiver(request):
         assert request.url.host == "8.8.8.8"
         assert request.headers["Host"] == request.extensions["sni_hostname"] == "seller.example"
         body = request.content
@@ -46,12 +47,12 @@ def test_postgres_webhook_skip_locked_and_http_holds_no_tenant_endpoint_delivery
         assert request.headers["X-OOS-Signature"] == "t=" + request.headers["X-OOS-Timestamp"] + ",v1=" + expected
         calls.append(request.headers["X-OOS-Event-Id"])
         sending.set()
-        assert send_release.wait(15)
+        assert await asyncio.to_thread(send_release.wait, 15)
         return httpx.Response(204)
 
     monkeypatch.setattr(TestingSessionLocal.class_, "commit", before_commit)
     monkeypatch.setattr(
-        httpx, "Client", lambda **kwargs: original_client(transport=httpx.MockTransport(receiver), **kwargs)
+        httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(receiver), **kwargs)
     )
     with ThreadPoolExecutor(max_workers=1) as pool:
         running = pool.submit(webhook_delivery.run_delivery_batch, TestingSessionLocal, settings)

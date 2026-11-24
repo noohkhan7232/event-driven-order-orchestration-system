@@ -1,5 +1,6 @@
 """Leased at-least-once HTTP delivery. No live session crosses the I/O boundary."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -106,6 +107,7 @@ def claim_delivery(factory: sessionmaker[Session], settings: Settings) -> Delive
 
 
 def send_webhook(url: str, body: bytes, headers: dict[str, str], settings: Settings) -> int:
+    deadline = time.monotonic() + settings.webhook_total_timeout_seconds
     url, address = resolve_target(url, settings)
     original = httpx.URL(url)
     pinned = original.copy_with(host=address)
@@ -113,17 +115,37 @@ def send_webhook(url: str, body: bytes, headers: dict[str, str], settings: Setti
     # httpcore's documented sni_hostname extension preserves certificate hostname
     # verification while the socket connects only to the validated numeric peer.
     # No ambient proxies, redirects, or second hostname DNS lookup.
-    with httpx.Client(timeout=settings.webhook_timeout_seconds, follow_redirects=False, trust_env=False) as client:
-        with client.stream(
-            "POST", pinned, content=body, headers=headers, extensions={"sni_hostname": original.host}
-        ) as response:
-            if not response.is_stream_consumed:
-                consumed = 0
-                for chunk in response.iter_raw(chunk_size=min(1024, settings.webhook_response_max_bytes)):
-                    consumed += len(chunk)
-                    if consumed >= settings.webhook_response_max_bytes:
-                        break
-            return response.status_code
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise httpx.TimeoutException("Webhook total deadline exceeded")
+    try:
+        return asyncio.run(_send_bounded(pinned, original.host, body, headers, settings, remaining))
+    except TimeoutError:
+        raise httpx.TimeoutException("Webhook total deadline exceeded") from None
+
+
+async def _send_bounded(
+    url: httpx.URL, hostname: str, body: bytes, headers: dict[str, str], settings: Settings, remaining: float
+) -> int:
+    # Cancellation reaches the async socket during connect/TLS/write/headers/body;
+    # frequent small reads cannot reset this deadline. Closing contexts aborts I/O.
+    async with asyncio.timeout(remaining):
+        async with httpx.AsyncClient(
+            timeout=settings.webhook_timeout_seconds,
+            follow_redirects=False,
+            trust_env=False,
+            verify=url.scheme == "https",
+        ) as client:
+            async with client.stream(
+                "POST", url, content=body, headers=headers, extensions={"sni_hostname": hostname}
+            ) as response:
+                if not response.is_stream_consumed:
+                    consumed = 0
+                    async for chunk in response.aiter_raw(chunk_size=min(1024, settings.webhook_response_max_bytes)):
+                        consumed += len(chunk)
+                        if consumed >= settings.webhook_response_max_bytes:
+                            break
+                return response.status_code
 
 
 def signed_request(claim: DeliveryClaim, settings: Settings) -> tuple[bytes, dict[str, str]]:
@@ -185,7 +207,10 @@ def finish_delivery(
 
 def run_delivery_batch(factory: sessionmaker[Session], settings: Settings) -> dict[str, int]:
     counts: dict[str, int] = {}
+    deadline = time.monotonic() + settings.webhook_batch_budget_seconds
     for _ in range(settings.webhook_delivery_batch_size):
+        if time.monotonic() >= deadline:
+            break
         claim = claim_delivery(factory, settings)
         if claim is None:
             break

@@ -67,6 +67,15 @@ services:
       worker:
         condition: service_started
 
+  integrations-worker:
+    <<: *application
+    command: celery -A app.workers.celery_app worker --loglevel=INFO --hostname=integrations@%h --queues=integrations --concurrency=${INTEGRATIONS_WORKER_CONCURRENCY:-2}
+    stop_grace_period: 100s
+    depends_on:
+      <<: *ready
+      api:
+        condition: service_started
+
   outbox-relay:
     <<: *application
     command: python -m app.workers.outbox_relay
