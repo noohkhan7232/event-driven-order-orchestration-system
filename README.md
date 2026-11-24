@@ -31,6 +31,58 @@ flowchart LR
 
 ## Local quickstart (PowerShell)
 
+### Seller dashboard foundation (Phase 4.1)
+
+The `frontend/` Next.js dashboard currently provides store registration, sign-in,
+sign-out, role-aware navigation and a guarded responsive workspace. Orders,
+catalog/settings screens and the buyer tracking page are deferred to 4.2–4.7.
+Apply the `API_PORT` override below if Windows reserves port 8000, then run
+`docker compose up --build -d` and open `http://localhost:3000`.
+`FRONTEND_PORT` overrides the loopback-bound host port; set `APP_ORIGIN` to the
+same browser origin (for example `http://localhost:13000`) when changing it.
+The API remains available on its loopback-bound `API_PORT` for local tooling.
+
+For frontend development, use Node **22.23.5** (see `frontend/.nvmrc`):
+
+```powershell
+cd frontend
+npm ci
+# Create .env.local only if it does not already exist; use .env.example as a reference.
+# Set API_INTERNAL_URL to the running API host URL, e.g. http://127.0.0.1:18000.
+npm run dev
+```
+
+Use the npm start/dev scripts, which preload socket-level IP sanitization.
+For a production build use `npm run build` then `npm start`. Docker runs the
+generated standalone server with the same preload as a non-root user.
+`npm run lint`, `typecheck`, `test`, `build`, and `gen:api:check` are CI gates;
+`npm run gen:api` regenerates types from `docs/openapi.json`. Frontend configuration
+is server-only: never place tokens, upstream URLs or credentials in `NEXT_PUBLIC_*`.
+
+The browser calls only same-origin `/bff/...` handlers. JWTs stay in a short-lived,
+httpOnly, SameSite=Lax cookie, Secure except for localhost loopback development.
+The BFF validates CSRF signals, path prefixes and staff roles, caps ordinary bodies,
+preserves rate-limit responses, and streams SSE without buffering. `GET /tenants/me`
+is the only additive backend endpoint: a staff-JWT-only projection of the current
+store's public metadata; it accepts no tenant selector.
+
+**Proxy trust:** the Node entry point overwrites client-supplied IP headers with
+the socket address. For a private reverse proxy, set `BFF_TRUSTED_PROXY_IPS` to
+its exact peer addresses and configure it to overwrite visitor XFF; the BFF takes
+only the rightmost supplied IP from an explicitly trusted peer. Keep the Node
+port and API private behind that proxy. Compose sets API `TRUSTED_PROXY_COUNT=1`;
+do not expose the API directly to untrusted callers with that setting. CDN/serverless
+launchers that bypass the preload are unsupported and fail closed for BFF calls.
+
+`npm run e2e` runs the 4.1 foundation checks against a real running Docker stack,
+using `E2E_FRONTEND_URL` if the port differs. The IP-independence proof requires
+`DASHBOARD_ENV=local` and `BFF_ALLOW_TEST_IP=true` on the frontend; only then can
+`X-Dashboard-Test-IP` override the socket identity. It is stripped before forwarding,
+ignored by default, and startup refuses the flag outside local/test. Restore the
+flag to false after this local experiment. Tests use synthetic stores and local
+HTTP only; F2–F10 and full F12 belong to later tasks. See the
+[Phase 4 report](docs/reports/phase-4-report.md) for exact verification scope.
+
 Run in the repository root with Docker Desktop and Docker Compose installed.
 The default stack reads **`.env.example`** and uses local mock payments,
 mock shipping and console notifications. These public demo defaults are for local
