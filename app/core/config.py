@@ -92,7 +92,10 @@ class Settings(BaseSettings):
     webhook_response_max_bytes: int = Field(default=1024, ge=1, le=65536)
     webhook_retry_base_seconds: float = Field(default=600, gt=0)
     webhook_retry_max_seconds: float = Field(default=43200, gt=0)
-    webhook_disable_after_failures: int = Field(default=20, ge=1)
+    # Includes failed validation/transport attempts; success resets this counter.
+    webhook_disable_after_failures: int = Field(
+        default=20, ge=1, description="Consecutive failed attempts; a successful attempt resets the endpoint counter"
+    )
     webhook_delivery_interval_seconds: float = Field(default=10, gt=0)
     webhook_delivery_batch_size: int = Field(default=100, ge=1, le=1000)
     webhook_lease_seconds: int = Field(default=60, ge=1)

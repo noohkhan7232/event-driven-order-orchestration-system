@@ -236,7 +236,10 @@ function verifyOos(raw, headers, secret) {
 
 The Python blocks share imports, as do the Node blocks. Default retries use
 exponential backoff with jitter, eight attempts over roughly 24h, then `dead`;
-20 consecutive failed attempts auto-disable an endpoint. Redirects are not followed.
+`WEBHOOK_DISABLE_AFTER_FAILURES=20` counts consecutive failed attempts, including
+validation/transport failures; a successful attempt resets the endpoint counter.
+Several retries of one delivery can disable it before that delivery exhausts its
+attempt budget. Redirects are not followed.
 Strict SSRF rules require HTTPS, allowed ports and exclusively public DNS answers;
 delivery pins a validated IP while retaining original Host/TLS SNI. Private HTTP
 targets require an explicit local-only override and port allowlist. Do not put
