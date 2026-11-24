@@ -417,8 +417,8 @@ services, create a dedicated disposable database named `orders_test` if needed,
 set the variables below, then run the same checks with a separate coverage file:
 
 ```powershell
-$env:TEST_DATABASE_URL='postgresql+psycopg://orders:orders@localhost:5432/orders_test'
-$env:TEST_REDIS_URL='redis://localhost:6379/15'
+$env:TEST_DATABASE_URL='postgresql+psycopg://orders:orders@127.0.0.1:5432/orders_test'
+$env:TEST_REDIS_URL='redis://127.0.0.1:6379/15'
 $env:COVERAGE_FILE='.coverage.review.postgres'
 .venv\Scripts\python -m pytest -q --cov=app --cov-report=term-missing --cov-report=json:.coverage.review.postgres.json --cov-fail-under=90
 .venv\Scripts\python scripts/check_coverage.py .coverage.review.postgres.json
