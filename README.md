@@ -50,7 +50,12 @@ Swagger is at `http://localhost:18000/docs` with the override above; otherwise u
 port 8000. The live schema is `/api/v1/openapi.json`; the checked-in contract is
 [docs/openapi.json](docs/openapi.json). PostgreSQL publishes 5432, Redis 6379,
 RabbitMQ 5672 and its local management UI 15672. Choose local port overrides if
-those are reserved. The stack includes `api`, `worker`, `integrations-worker`, `scheduler`, `outbox-relay`,
+those are reserved: `POSTGRES_PORT`, `REDIS_PORT`, `RABBITMQ_PORT` and
+`RABBITMQ_MANAGEMENT_PORT` are Compose host-port overrides. All four backend
+bindings are fixed to127.0.0.1. Container-to-container DNS/ports stay unchanged;
+host tests should use matching `TEST_DATABASE_URL`, `TEST_REDIS_URL` and
+`E2E_DATABASE_URL` when ports change.
+The stack includes `api`, `worker`, `integrations-worker`, `scheduler`, `outbox-relay`,
 `migrate`, `postgres`, `redis` and `rabbitmq`.
 
 Register a seller, create priced stock, then place an order:
