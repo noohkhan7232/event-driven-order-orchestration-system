@@ -1,8 +1,8 @@
 # Phase 3B — complete implementation and local verification
 
 24 November 2026, Asia/Calcutta. Branch: `phase-3b-integrations`.
-Tasks 3B.1–3B.13 and 3B.P1 are DONE. This session completes only 3B.13;
-previously reviewed implementations are retained. Live-service limits are in B13.
+Tasks 3B.1–3B.13 and 3B.P1 are DONE. The reviewed Phase 3B baseline is retained;
+the subsequent 3C hardening patch is recorded below. Live-service limits are in B13.
 This document describes the current system and final evidence only.
 
 # PART A — Architecture and operations
@@ -241,7 +241,7 @@ tracking fields must themselves be supplied without personal data; there is no D
 {"id":"00000000-0000-4000-8000-000000000001","type":"order.shipped","created_at":"2026-11-22T08:00:00+00:00","tenant_id":"00000000-0000-0000-0000-000000000001","data":{"order_id":"00000000-0000-4000-8000-000000000002","external_reference":"shop-1001","status":"shipped","from":"fulfillment_requested","to":"shipped","currency":"INR","total":"59.97","items":[{"sku":"TEA","name":"Tea","quantity":3}],"shipments":[{"carrier":"Seller courier","tracking_number":"TRACK123"}],"created_at":"2026-11-22T07:00:00+00:00","updated_at":"2026-11-22T08:00:00+00:00"}}
 ```
 
-The orders-queue poller locks ENDPOINT then DELIVERY with SKIP LOCKED, commits a
+The integrations-queue poller locks ENDPOINT then DELIVERY with SKIP LOCKED, commits a
 durable attempt/token/lease and closes its session. DNS, decryption, signing and
 all HTTP run on detached values. Completion locks the same rows and checks the
 token before updating. Expired leases recover crashes; exhausted crash budgets
@@ -256,7 +256,25 @@ JSON is deterministic UTF-8; timestamp/signature refresh each attempt. HTTP2 is
 not enabled. 2xx delivers; other statuses/transport failures retry. Redirects are
 never followed; response wire bytes are capped and never stored. Errors are fixed
 safe codes, not exception/response text. Default HTTP connect/read/write/pool timeout
-is5s; OS DNS resolution follows host resolver configuration.
+is5s. A cancellable15s total deadline encloses connect, TLS, request write,
+response headers and body; DNS consumes the same remaining send budget. Local
+slow-drip headers/body and silent peers return transport_error within that bound.
+WEBHOOK_BATCH_BUDGET_SECONDS=45 stops new claims; an already claimed send may finish.
+Total timeout must exceed the per-operation timeout and remain below the60s lease;
+batch budget plus total timeout must be below the75s task soft limit.
+
+DNS has a3s hard caller timeout. At most8 daemon lookups per process can outlive
+their callers; timeout or saturation raises generic UnsafeTarget. All four IPv6
+transition prefixes are rejected entirely, including public embedded IPv4 and the
+local override:64:ff9b::/96,64:ff9b:1::/48,2002::/16,2001::/32.
+
+deliver_webhooks/send_notifications run only on the integrations queue, consumed
+by integrations-worker (default concurrency2); the saga worker excludes that queue.
+Both tasks have75s soft/90s hard limits. Same-task overlap admission uses an
+owner-checked Redis lock with105s TTL when REDIS_URL is nonempty; Redis failure
+claims no work. Otherwise PostgreSQL uses a session advisory lock on an autocommit
+connection, with no business row locks/transaction across I/O. SQLite's process
+lock is a local-test fallback. Distinct poller tasks have independent guard keys.
 
 Retries use min(43200,600×2^(attempt-1)) seconds plus0–10% jitter. Eight attempts
 span roughly22.5–24.75h. Each failed attempt increments consecutive_failures;
@@ -317,7 +335,7 @@ function verify(raw, headers, secret) {
 
 The workflow journals notifications with the business transaction, never buyer
 contact data in domain events. UNIQUE(order_id,channel,template) guards duplicate
-triggers. Sending is a separate orders-queue poller with durable attempts, due time,
+triggers. Sending is a separate integrations-queue poller with durable attempts, due time,
 token/lease, and pending/sent/failed/skipped statuses. It reads buyer_email and the
 tenant preference immediately before sending, commits and closes the session,
 then calls the channel. Only a masked recipient_hint is stored. Disabled tenants,
@@ -711,14 +729,24 @@ separate from the local operational databases; pytest refuses non-_test PG names
 |WEBHOOK_ALLOW_INSECURE_TARGETS|false; forbidden outside local/development/test|
 |WEBHOOK_EXTRA_ALLOWED_PORTS|[]; JSON list of1–65535 ports, additional to443|
 |WEBHOOK_MAX_ATTEMPTS|8;1–100, durable attempt budget|
-|WEBHOOK_TIMEOUT_SECONDS|5; positive≤60 HTTP timeout|
+|WEBHOOK_TIMEOUT_SECONDS|5; positive≤60 connect/read/write/pool timeout|
+|WEBHOOK_TOTAL_TIMEOUT_SECONDS|15; greater than per-operation timeout, below lease; all HTTP phases|
+|WEBHOOK_DNS_TIMEOUT_SECONDS|3; positive finite hard caller bound, capped by remaining send budget|
+|WEBHOOK_BATCH_BUDGET_SECONDS|45; stop new claims; budget+total must be below75s|
 |WEBHOOK_RESPONSE_MAX_BYTES|1024;1–65536 wire-byte cap|
 |WEBHOOK_RETRY_BASE_SECONDS|600; positive|
 |WEBHOOK_RETRY_MAX_SECONDS|43200; positive|
-|WEBHOOK_DISABLE_AFTER_FAILURES|20; positive|
+|WEBHOOK_DISABLE_AFTER_FAILURES|20; consecutive failed ATTEMPTS, including validation/transport; success resets|
 |WEBHOOK_DELIVERY_INTERVAL_SECONDS|10; positive beat interval|
 |WEBHOOK_DELIVERY_BATCH_SIZE|100;1–1000|
-|WEBHOOK_LEASE_SECONDS|60; must exceed HTTP timeout|
+|WEBHOOK_LEASE_SECONDS|60; must exceed total HTTP timeout|
+|INTEGRATIONS_WORKER_CONCURRENCY|2; Compose-only worker concurrency, shell/.env interpolation|
+|POSTGRES_PORT / REDIS_PORT|5432 /6379; Compose host ports bound to127.0.0.1|
+|RABBITMQ_PORT / RABBITMQ_MANAGEMENT_PORT|5672 /15672; Compose host ports bound to127.0.0.1|
+
+Integration task limits are code constants:75s soft,90s hard,105s Redis guard TTL;
+integrations-worker has100s shutdown grace. Internal PostgreSQL/Redis/RabbitMQ
+service names and ports remain unchanged when host ports are overridden.
 
 Outbound secrets use the existing CREDENTIALS_ENCRYPTION_KEY ring; no separate
 plaintext secret store or external-provider credentials are introduced.
@@ -849,6 +877,19 @@ Its temporary platform principal uses a random credential and is revoked on clea
 audit identity and order/financial history remain. Its Razorpay HTTP case is a local session
 fixture with dummy credentials and no remote order/charge.
 
+3C operations: include integrations-worker in private environment overrides and
+run docker compose up --build -d. Inspect active_queues: the saga worker consumes
+orders/inventory/payments/shipments/dead_letter; integrations-worker only integrations.
+For stalled integrations inspect guard health/TTL, due times and durable leases;
+do not delete an active owner's lock. Recover expired claims through normal pollers.
+Before rebinding backend ports, quiesce writers and drain ready/unacknowledged
+broker messages; preserve volumes. Host ports use the A11 variables; matching host
+test URLs are required. Windows API conflicts use API_PORT (18000 in the 3C run).
+Update public base URLs for browser links when changing that host port. Verify with
+python scripts/e2e_integrations.py --section hardening; it restores defaults on api,
+worker, scheduler and integrations-worker. WEBHOOK_DISABLE_AFTER_FAILURES counts
+failed attempts, so retries of a single delivery can disable an endpoint.
+
 Scoped Part 2 operations: select manual through owner PATCH /settings/shipping,
 attach courier metadata, then record transit/delivery observations. Existing
 migrated tenants preserve mock; switch them before production shipping.
@@ -904,6 +945,9 @@ live provider or production guarantee follows from local Docker verification.
 # PART B — Current verification
 
 ## B1. Summary
+
+This subsection and B4/B6/B10 retain Phase 3B baseline evidence. Current 3C
+verification is recorded in the hardening subsection at the end of this report.
 
 All Phase3B tasks3B.1–3B.13 and3B.P1 are DONE; none are skipped.
 Session starts at clean bf02c7c on phase-3b-integrations; earlier tasks are retained.
@@ -1255,7 +1299,8 @@ order.paid and refund.processed/failed. API endpoint rows above retain their
 
 ## B10. Changed files and commits
 
-Current complete Phase3B diff against main (every file; width flags do not limit count):
+Phase3B baseline diff against main through336ab11 (every file; width flags do not
+limit count). The subsequent 3C source commits and verification are recorded below:
 
 ```text
 .dockerignore              |    1 +
@@ -1572,6 +1617,9 @@ No product feature/application change or selected blocker remains.
 
 - Live Razorpay session/refund/settlement/entitlements, external SMTP/TLS/egress,
   hosted CI, production deployment/HA/soak and real browser/proxy performance.
+- External HTTPS/TLS drip/backpressure, live transition-network routing and
+  production guard/failover behavior. Deadline peer tests use local plain HTTP;
+  DNS blocking/saturation tests use controlled resolver stubs.
 - Arbitrarily delayed transactions beyond the SSE gap window: refresh snapshots.
   Synchronous slow DB reads may delay cancellation; production timeout/ingress
   tuning is not asserted. Previously accepted reads/sends may finish on revocation.
@@ -1605,8 +1653,8 @@ Remove-Item Env:TEST_REDIS_URL -ErrorAction SilentlyContinue
 $env:COVERAGE_FILE='.coverage.review.sqlite'
 & $py -m pytest -q --cov=app --cov-report=json:.coverage.review.sqlite.json --cov-report=term-missing --cov-fail-under=90
 & $py scripts/check_coverage.py .coverage.review.sqlite.json
-$env:TEST_DATABASE_URL='postgresql+psycopg://orders:orders@localhost:5432/orders_test'
-$env:TEST_REDIS_URL='redis://localhost:6379/15'
+$env:TEST_DATABASE_URL='postgresql+psycopg://orders:orders@127.0.0.1:5432/orders_test'
+$env:TEST_REDIS_URL='redis://127.0.0.1:6379/15'
 $env:COVERAGE_FILE='.coverage.review.postgres'
 & $py -m pytest -q --cov=app --cov-report=json:.coverage.review.postgres.json --cov-report=term-missing --cov-fail-under=90
 & $py scripts/check_coverage.py .coverage.review.postgres.json
@@ -1630,3 +1678,160 @@ with --section legacy|payments|abuse|sessions|sellers available for diagnosis.
 Run only one Docker acceptance process at a time: it temporarily reconfigures and
 restarts services, then restores defaults. Test databases remain separate.
 No real provider keys belong in test runs.
+
+## 3C hardening patch
+
+24 November 2026, phase-3b-integrations; baseline 336ab11. H1–H4 are DONE;
+none skipped. No product feature, route, schema or native enum is added.
+
+| Item | Source commit | Change |
+|---|---|---|
+|H1|de3ccc9|Cancellable total HTTP deadline; integrations queue/worker; batch budget, task limits and overlap admission|
+|H2|91ccfbd|Reject entire NAT64/6to4/Teredo prefixes, including public embedded IPv4; hard DNS bound and capped daemon capacity|
+|H3|cf9517c|Four loopback backend bindings with host-port overrides; real internal connectivity/queue proof|
+|H4|addcf79|Existing counter semantics retained: consecutive failed ATTEMPTS, not completed deliveries; success resets|
+
+Follow-up docs commit8221d6b uses explicit IPv4 loopback test URLs in README.
+A5/A6, A11 and A13 describe the current architecture, settings and operations.
+The poller guard uses REDIS_URL when nonempty; unavailable Redis fails closed.
+Otherwise PostgreSQL advisory admission holds an autocommit session, with no
+business row locks. SQLite's process mutex is a local-test fallback. Redis release
+checks owner tokens and105s TTL exceeds the90s hard limit. The shared total send
+budget includes DNS; timeout/overload is generic UnsafeTarget. Timed-out OS DNS
+calls can outlive callers, capped at8 per process. Local insecure mode never permits
+the four rejected transition prefixes. Existing retry scheduling and payloads stay.
+
+TDD and focused controls (raw counts; positive controls are not claimed as reds):
+
+| Item | Before | After |
+|---|---|---|
+|H1|12 failed,1 passed,2 skipped in37.07s|24 PostgreSQL/Redis controls passed27.94s; guard100%, delivery97.78%|
+|H2|11 failed,9 passed in15.40s;3 finite-setting failures|77 focused passed51.08s; isolated full600 passed/45 skipped|
+|H3|4 failed2.36s|6 binding/dependency controls passed2.44s; full604 passed/45 skipped; real stack proof below|
+|H4|1 failed,1 positive control1.27s|2 passed1.10s; final full suites below|
+
+The local deadline fixtures use2.5s operation timeout/3s total and drip one byte
+every2s. Completion retains failed/transport_error, attempt1, cleared lease and
+future retry. The budget test leaves the next delivery unclaimed; a second local
+endpoint succeeds in the next run. Overlap returns promptly without calling the
+batch; Redis TTL/owner-safe release and PostgreSQL advisory exclusion/idle-session
+checks run against local services. Original HTTP NOWAIT/rotation proof is retained.
+
+```text
+TOTAL DEADLINE headers: 3.02s; failed/transport_error; attempt1; retry retained
+TOTAL DEADLINE body: 3.02s; failed/transport_error; attempt1; retry retained
+TOTAL DEADLINE silent: 2.52s; failed/transport_error; attempt1; retry retained
+OUTBOUND HTTP IN FLIGHT: TENANT/ENDPOINT/DELIVERY NOWAIT AND OWNER ROTATION PASS; PEER SKIP LOCKED; ONE SEND
+```
+
+Final static/full-suite results, production-only coverage (tests omitted):
+
+```text
+All checks passed!
+216 files already formatted
+Success: no issues found in 175 source files
+OpenAPI export is fresh
+SQLite: 606 passed, 45 skipped in 500.40s (0:08:20)
+PostgreSQL+Redis: 650 passed, 1 skipped in 761.80s (0:12:41)
+Production total: SQLite 97.17%; PostgreSQL+Redis 97.24%
+All 18 required production modules >=90% in both runs
+```
+
+| Changed production module | SQLite | PostgreSQL+Redis |
+|---|---:|---:|
+|app/core/integration_guard.py|100.00%|100.00%|
+|app/core/ssrf.py|96.30%|96.30%|
+|app/services/webhook_delivery.py|97.78%|97.78%|
+|app/core/config.py|99.40%|99.40%|
+|app/workers/tasks.py|96.44%|95.11%|
+|app/workers/celery_app.py|100.00%|100.00%|
+
+Real Docker: docker compose up --build -d succeeds; migrate Exited0; all application
+services, including integrations-worker, run. H3 quiesces writers and verifies all
+durable queues ready0/unacknowledged0 before backend recreation. PostgreSQL volumes
+remain; Redis is an ephemeral cache. All five application services reach PostgreSQL,
+Redis and RabbitMQ internally. Published backend ports are127.0.0.1:5432/6379/5672/15672.
+Actual saga queues:orders,inventory,payments,shipments,dead_letter; actual integration
+worker queue:integrations. Read-only Compose interpolation verifies alternate host
+ports15432/16379/15673/15674 and API18001 without changing internal ports.
+
+Final read-only service/queue checks (raw):
+
+```text
+api: PASS PostgreSQL/Redis/RabbitMQ internal reachability
+worker: PASS PostgreSQL/Redis/RabbitMQ internal reachability
+outbox-relay: PASS PostgreSQL/Redis/RabbitMQ internal reachability
+scheduler: PASS PostgreSQL/Redis/RabbitMQ internal reachability
+integrations-worker: PASS PostgreSQL/Redis/RabbitMQ internal reachability
+PASS loopback postgres/5432: 127.0.0.1:5432
+PASS loopback redis/6379: 127.0.0.1:6379
+PASS loopback rabbitmq/5672: 127.0.0.1:5672
+PASS loopback rabbitmq/15672: 127.0.0.1:15672
+PASS actual queues worker: dead_letter,inventory,orders,payments,shipments
+PASS actual queues integrations-worker: integrations
+integrations-worker   running   Up 10 minutes
+migrate               exited    Exited (0) 9 minutes ago
+```
+
+Requested real e2e run (local sink/Mailpit; no remote provider):
+
+```text
+PASS E1 happy path: fulfillment_requested; payment=1 shipment=1 stock=(9,1)
+PASS E8 concurrent orders: 30-vs-10: fulfilled=10 failed=20 available=0 reserved=10 conserved=10
+RESULT: 2/2 experiments passed
+PASS E22: four logical lifecycle events; every received signature independently verified; delivered logs, no buyer PII
+PASS E23: 503/503/204; exhaustion dead after3; replay same event ID/replay_count1; one success each
+PASS E24: 14 real API rejections: localhost, metadata/private/CGNAT, IPv6/mapped, encoded IPs and non-HTTPS
+PASS E25: Mailpit exactly1 per trigger across6 templates; graceful worker restart mid-order and repeat polls no resend; opt-out0
+PASS E27: real HTTP live sequence; disconnect/reconnect Last-Event-ID exact timeline; friendly public stream; foreign0
+PASS selected Phase 3B acceptance section: hardening
+```
+
+All four app roles restore the same defaults: auto-complete true, injection false,
+normal quota backend, no temporary encryption key, console notifications, strict
+webhook targets,8 attempts/10s poll,5s operation/15s total/3s DNS/45s batch budget,
+SSE300s/1s poll/5s lookback and tracking60/min. Temporary quota service/config and
+owned encrypted webhook fixtures are removed; volumes/order/money/audit evidence remain.
+
+Modified existing tests (all original assertions retained):
+
+- test_webhook_delivery.py::test_http_redirects_not_followed_response_stream_capped_and_errors_sanitized:
+  AsyncClient/AsyncByteStream replaces the synchronous mock; the pinned IP, Host/SNI,
+  redirect, exactly-one-chunk cap and sanitized-failure assertions remain.
+- test_webhook_delivery_postgres.py::test_postgres_webhook_skip_locked_and_http_holds_no_tenant_endpoint_delivery_locks:
+  async mock transport awaits its release event without blocking cancellation; the
+  original NOWAIT, peer exclusion, owner rotation, exact send/signature/state checks remain.
+
+All other regression tests are unchanged. New tests cover H1/H2 guards/deadlines,
+host bindings and failed-attempt wording/behavior. New fixture corrections normalize
+SQLite UTC values and set distinct due times for intended slow-first order; no
+existing assertion is weakened. One SQLite run overlapped a new control's database
+and is discarded; clean runs use dedicated databases. A coverage command initially
+used file names instead of module names; its no-data result is discarded and rerun.
+The first resumed backend-dependent run is cancelled because Docker is stopped;
+Docker Desktop is started and the suite rerun. A later PostgreSQL run stops
+making progress before completion; a verbose diagnostic attempt is also cancelled.
+Both use localhost with IPv4-only bindings. Explicit127.0.0.1 test URLs restore
+progress (direct PostgreSQL SELECT1:0.047s); the final run retains verbose output
+and a120s faulthandler diagnostic. Only the completed run counts as final evidence.
+Windows rejects host8000 and8025. The first e2e setup attempt passes E1/E8 but
+cannot start Mailpit; it is discarded. The successful rerun uses supported host
+overrides API18000, Mailpit UI18025/SMTP11025 and sink18090, with matching e2e URLs.
+
+NOT VERIFIED remains B13: live Razorpay (optional credentials test skipped), external
+TLS/SMTP, hosted CI, production/HA/failover and browser/proxy behavior. No push,
+merge or deployment is performed. Reproduce with B14 test commands plus:
+
+```powershell
+$env:TEST_DATABASE_URL='postgresql+psycopg://orders:orders@127.0.0.1:5432/orders_test'
+$env:TEST_REDIS_URL='redis://127.0.0.1:6379/15'
+$env:API_PORT='18000'
+$env:MAILPIT_SMTP_PORT='11025'
+$env:MAILPIT_UI_PORT='18025'
+$env:WEBHOOK_SINK_PORT='18090'
+$env:E2E_BASE_URL='http://127.0.0.1:18000'
+$env:E2E_MAILPIT_URL='http://127.0.0.1:18025'
+$env:E2E_SINK_URL='http://127.0.0.1:18090'
+docker compose up --build -d
+.venv\Scripts\python scripts/e2e_integrations.py --section hardening
+```
