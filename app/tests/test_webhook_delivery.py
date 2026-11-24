@@ -107,12 +107,12 @@ def test_http_redirects_not_followed_response_stream_capped_and_errors_sanitized
 
     _, auth, endpoint, settings = seller_endpoint
     identity = ping(client, auth, endpoint)
-    original = httpx.Client
+    original = httpx.AsyncClient
     calls = []
     chunks = []
 
-    class LargeStream(httpx.SyncByteStream):
-        def __iter__(self):
+    class LargeStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
             for _ in range(100):
                 chunks.append(1)
                 yield b"x" * 1024
@@ -124,7 +124,9 @@ def test_http_redirects_not_followed_response_stream_capped_and_errors_sanitized
         calls.append(str(request.url))
         return httpx.Response(302, headers={"Location": "https://127.0.0.1/unsafe"}, stream=LargeStream())
 
-    monkeypatch.setattr(httpx, "Client", lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs)
+    )
     webhook_delivery.run_delivery_batch(TestingSessionLocal, settings)
     db.expire_all()
     row = db.get(WebhookDelivery, identity)

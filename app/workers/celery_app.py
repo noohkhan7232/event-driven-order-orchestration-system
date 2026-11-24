@@ -25,8 +25,8 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
     task_routes={
-        "app.workers.tasks.send_notifications": {"queue": "orders"},
-        "app.workers.tasks.deliver_webhooks": {"queue": "orders"},
+        "app.workers.tasks.send_notifications": {"queue": "integrations"},
+        "app.workers.tasks.deliver_webhooks": {"queue": "integrations"},
         "app.workers.tasks.expire_unpaid_orders": {"queue": "payments"},
         "app.workers.tasks.reconcile_pending_payments": {"queue": "payments"},
         "app.workers.tasks.process_refund": {"queue": "payments"},
@@ -39,16 +39,19 @@ celery_app.conf.update(
         Queue("inventory", domain_exchange, routing_key="inventory"),
         Queue("payments", domain_exchange, routing_key="payments"),
         Queue("shipments", domain_exchange, routing_key="shipments"),
+        Queue("integrations", domain_exchange, routing_key="integrations"),
         Queue("dead_letter", dead_letter_exchange, routing_key="dead_letter"),
     ),
     beat_schedule={
         "send-notifications": {
             "task": "app.workers.tasks.send_notifications",
             "schedule": settings.notification_interval_seconds,
+            "options": {"queue": "integrations", "routing_key": "integrations"},
         },
         "deliver-webhooks": {
             "task": "app.workers.tasks.deliver_webhooks",
             "schedule": settings.webhook_delivery_interval_seconds,
+            "options": {"queue": "integrations", "routing_key": "integrations"},
         },
         "expire-unpaid-orders": {
             "task": "app.workers.tasks.expire_unpaid_orders",
