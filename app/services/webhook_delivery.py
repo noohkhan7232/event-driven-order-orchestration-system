@@ -108,7 +108,7 @@ def claim_delivery(factory: sessionmaker[Session], settings: Settings) -> Delive
 
 def send_webhook(url: str, body: bytes, headers: dict[str, str], settings: Settings) -> int:
     deadline = time.monotonic() + settings.webhook_total_timeout_seconds
-    url, address = resolve_target(url, settings)
+    url, address = resolve_target(url, settings, dns_timeout=max(0, deadline - time.monotonic()))
     original = httpx.URL(url)
     pinned = original.copy_with(host=address)
     headers = {**headers, "Host": original.netloc.decode("ascii")}

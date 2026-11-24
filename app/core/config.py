@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     webhook_max_attempts: int = Field(default=8, ge=1, le=100)
     webhook_timeout_seconds: float = Field(default=5, gt=0, le=60)
     webhook_total_timeout_seconds: float = Field(default=15, gt=0)
+    webhook_dns_timeout_seconds: float = Field(default=3, gt=0, allow_inf_nan=False)
     webhook_batch_budget_seconds: float = Field(default=45, gt=0)
     webhook_response_max_bytes: int = Field(default=1024, ge=1, le=65536)
     webhook_retry_base_seconds: float = Field(default=600, gt=0)

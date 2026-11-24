@@ -213,6 +213,7 @@ def main() -> None:
                     "'webhook_insecure':s.webhook_allow_insecure_targets,"
                     "'webhook_attempts':s.webhook_max_attempts,'webhook_interval':s.webhook_delivery_interval_seconds,"
                     "'webhook_total_timeout':s.webhook_total_timeout_seconds,"
+                    "'webhook_dns_timeout':s.webhook_dns_timeout_seconds,"
                     "'webhook_batch_budget':s.webhook_batch_budget_seconds,"
                     "'notification_interval':s.notification_interval_seconds,"
                     "'stream_max':s.sse_max_seconds,'stream_poll':s.sse_poll_seconds,"
@@ -238,6 +239,7 @@ def main() -> None:
                         "webhook_attempts": 8,
                         "webhook_interval": 10,
                         "webhook_total_timeout": 15,
+                        "webhook_dns_timeout": 3,
                         "webhook_batch_budget": 45,
                         "notification_interval": 10,
                         "stream_max": 300,

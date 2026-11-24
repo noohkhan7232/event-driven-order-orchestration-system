@@ -368,6 +368,11 @@ preserves the original identity. Invalid poison payloads are safe conflicts.
 
 Outbound HTTP uses a cancellable total deadline (`WEBHOOK_TOTAL_TIMEOUT_SECONDS=15`)
 across connect/TLS/write/response headers/body; the connect/read timeout remains5s.
+DNS has its own hard caller deadline (`WEBHOOK_DNS_TIMEOUT_SECONDS=3`), capped by
+the remaining total send budget. At most8 daemon lookups can outlive their callers
+per process; saturation and timeout fail with the generic unsafe-target error.
+Both NAT64 ranges (`64:ff9b::/96`, `64:ff9b:1::/48`), 6to4 (`2002::/16`) and Teredo
+(`2001::/32`) are rejected entirely, including public embedded IPv4 and local override.
 `WEBHOOK_BATCH_BUDGET_SECONDS=45` stops new claims, allowing the current send to finish.
 Both poller tasks have75s soft/90s hard Celery limits. `integrations-worker` alone
 consumes `integrations`, with `INTEGRATIONS_WORKER_CONCURRENCY=2`; the saga worker
