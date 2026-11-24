@@ -1,0 +1,89 @@
+@import "tailwindcss";
+@theme inline {
+  --font-sans: Arial, Helvetica, sans-serif;
+}
+:root {
+  color-scheme: light;
+}
+body {
+  margin: 0;
+  background: #f5f7f8;
+  color: #1e293b;
+  font-family: Arial, Helvetica, sans-serif;
+}
+label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+input {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #64748b;
+  background: white;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+input:focus-visible,
+a:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 3px;
+}
+input[aria-invalid="true"] {
+  border-color: #b91c1c;
+}
+.field-error {
+  color: #991b1b;
+  font-size: 0.875rem;
+  margin-top: 6px;
+}
+.notice {
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 0.875rem;
+}
+.success {
+  color: #115e59;
+  background: #f0fdfa;
+  padding: 12px;
+  border-radius: 8px;
+}
+.nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.nav-link[aria-current="page"] {
+  color: #115e59;
+  background: #f0fdfa;
+}
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  transform: translateY(-200%);
+  background: white;
+  padding: 12px;
+}
+.skip-link:focus {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

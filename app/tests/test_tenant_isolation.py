@@ -203,6 +203,7 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/system/ready"),
     }
     tenant = {
+        ("GET", "/api/v1/tenants/me"),
         ("GET", "/api/v1/failed-jobs"),
         ("GET", "/api/v1/failed-jobs/{job_id}"),
         ("POST", "/api/v1/failed-jobs/{job_id}/replay"),

@@ -19,6 +19,19 @@ x-application: &application
   depends_on: *ready
 
 services:
+  frontend:
+    build: ./frontend
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      DASHBOARD_ENV: ${DASHBOARD_ENV:-local}
+      BFF_ALLOW_TEST_IP: ${BFF_ALLOW_TEST_IP:-false}
+      BFF_TRUSTED_PROXY_IPS: ${BFF_TRUSTED_PROXY_IPS:-}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_started
   mailpit:
     image: axllent/mailpit:latest
     profiles: [dev-tools]
@@ -47,9 +60,13 @@ services:
 
   api:
     <<: *application
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      FAILURE_INJECTION_ENABLED: ${FAILURE_INJECTION_ENABLED:-false}
+      NOTIFICATIONS_BACKEND: ${NOTIFICATIONS_BACKEND:-console}
+      TRUSTED_PROXY_COUNT: 1
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
 
   worker:
     <<: *application

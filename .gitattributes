@@ -1,1 +1,4 @@
 *.mp4 filter=lfs diff=lfs merge=lfs -text
+
+# Generated API types must compare identically on Windows and Linux.
+frontend/src/lib/api/generated.ts text eol=lf
