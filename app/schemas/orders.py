@@ -91,3 +91,29 @@ class OrderRead(BaseModel):
 class StatusUpdate(BaseModel):
     status: OrderStatus
     reason: str | None = None
+
+
+class ActivityEvent(BaseModel):
+    id: str
+    at: datetime
+    status: str
+
+
+class PaymentActivity(ActivityEvent):
+    provider_status: str | None
+
+
+class RefundActivity(ActivityEvent):
+    amount: Decimal
+    currency: str
+
+
+class ShipmentActivity(ActivityEvent):
+    shipment_id: UUID
+
+
+class OrderActivity(BaseModel):
+    timeline: list[ActivityEvent]
+    payments: list[PaymentActivity]
+    shipments: list[ShipmentActivity]
+    refunds: list[RefundActivity]

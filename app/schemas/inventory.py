@@ -9,6 +9,15 @@ class WarehouseCreate(BaseModel):
     region: str = Field(min_length=2, max_length=80)
 
 
+class WarehouseRead(BaseModel):
+    id: UUID
+    code: str
+    name: str
+    region: str
+
+    model_config = {"from_attributes": True}
+
+
 class InventoryCreate(BaseModel):
     sku: str = Field(min_length=1, max_length=64)
     product_name: str | None = None

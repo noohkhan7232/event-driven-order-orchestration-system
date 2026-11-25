@@ -24,7 +24,13 @@ export function Shell({
   const links = (
     <nav aria-label={s.menu} className="space-y-1">
       {navigation(user).map((item) =>
-        ["/dashboard", "/platform"].includes(item.href) ? (
+        [
+          "/dashboard",
+          "/platform",
+          "/orders",
+          "/catalog",
+          "/inventory",
+        ].includes(item.href) ? (
           <Link
             key={item.href}
             href={item.href}

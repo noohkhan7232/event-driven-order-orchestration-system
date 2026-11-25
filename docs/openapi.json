@@ -1,6 +1,30 @@
 {
   "components": {
     "schemas": {
+      "ActivityEvent": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "status"
+        ],
+        "title": "ActivityEvent",
+        "type": "object"
+      },
       "ApiKeyCreate": {
         "properties": {
           "expires_at": {
@@ -799,6 +823,46 @@
         "title": "NotificationSettings",
         "type": "object"
       },
+      "OrderActivity": {
+        "properties": {
+          "payments": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentActivity"
+            },
+            "title": "Payments",
+            "type": "array"
+          },
+          "refunds": {
+            "items": {
+              "$ref": "#/components/schemas/RefundActivity"
+            },
+            "title": "Refunds",
+            "type": "array"
+          },
+          "shipments": {
+            "items": {
+              "$ref": "#/components/schemas/ShipmentActivity"
+            },
+            "title": "Shipments",
+            "type": "array"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/ActivityEvent"
+            },
+            "title": "Timeline",
+            "type": "array"
+          }
+        },
+        "required": [
+          "timeline",
+          "payments",
+          "shipments",
+          "refunds"
+        ],
+        "title": "OrderActivity",
+        "type": "object"
+      },
       "OrderCreate": {
         "properties": {
           "buyer_email": {
@@ -1312,6 +1376,76 @@
         "title": "Page[TenantRead]",
         "type": "object"
       },
+      "Page_WarehouseRead_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WarehouseRead"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[WarehouseRead]",
+        "type": "object"
+      },
+      "PaymentActivity": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "provider_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Status"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "status",
+          "provider_status"
+        ],
+        "title": "PaymentActivity",
+        "type": "object"
+      },
       "PaymentConfigRead": {
         "properties": {
           "active": {
@@ -1618,6 +1752,40 @@
         "title": "ProductUpdate",
         "type": "object"
       },
+      "RefundActivity": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "status",
+          "amount",
+          "currency"
+        ],
+        "title": "RefundActivity",
+        "type": "object"
+      },
       "ReplayAccepted": {
         "properties": {
           "event_id": {
@@ -1642,6 +1810,36 @@
           "event_id"
         ],
         "title": "ReplayAccepted",
+        "type": "object"
+      },
+      "ShipmentActivity": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "shipment_id": {
+            "format": "uuid",
+            "title": "Shipment Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "status",
+          "shipment_id"
+        ],
+        "title": "ShipmentActivity",
         "type": "object"
       },
       "ShipmentEventCreate": {
@@ -2091,6 +2289,35 @@
           "region"
         ],
         "title": "WarehouseCreate",
+        "type": "object"
+      },
+      "WarehouseRead": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "region": {
+            "title": "Region",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "region"
+        ],
+        "title": "WarehouseRead",
         "type": "object"
       }
     }
@@ -3643,6 +3870,92 @@
       }
     },
     "/api/v1/inventory/warehouses": {
+      "get": {
+        "operationId": "list_warehouses_api_v1_inventory_warehouses_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_WarehouseRead_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Warehouses",
+        "tags": [
+          "Inventory"
+        ]
+      },
       "post": {
         "operationId": "create_warehouse_api_v1_inventory_warehouses_post",
         "parameters": [
@@ -4383,6 +4696,81 @@
           }
         },
         "summary": "Get Order",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}/activity": {
+      "get": {
+        "operationId": "order_activity_api_v1_orders__order_id__activity_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderActivity"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Order Activity",
         "tags": [
           "Orders"
         ]

@@ -87,3 +87,69 @@ input[aria-invalid="true"] {
     scroll-behavior: auto !important;
   }
 }
+
+select,
+textarea {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #64748b;
+  background: white;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.panel {
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  background: white;
+  padding: 20px;
+  min-width: 0;
+}
+.section-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+input[type="checkbox"] {
+  width: 20px;
+  min-height: 20px;
+}
+
+.stock-table {
+  border-collapse: separate;
+  border-spacing: 0 12px;
+}
+.stock-table th,
+.stock-table td {
+  padding: 12px 8px;
+  vertical-align: top;
+  background: white;
+}
+.stock-table thead th {
+  color: #475569;
+  font-weight: 600;
+}
+@media (max-width: 1023px) {
+  .stock-table,
+  .stock-table tbody,
+  .stock-table tr,
+  .stock-table th,
+  .stock-table td {
+    display: block;
+    width: 100%;
+  }
+  .stock-table thead {
+    display: none;
+  }
+  .stock-table tr {
+    margin-bottom: 16px;
+    border: 1px solid #cbd5e1;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .stock-table td[data-label]::before {
+    content: attr(data-label);
+    display: inline-block;
+    width: 50%;
+    font-weight: 600;
+  }
+}
