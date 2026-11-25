@@ -5,7 +5,7 @@ import { api } from "@/lib/api/client";
 import type { components } from "@/lib/api/generated";
 import { failureMessage, safeLink, type Order } from "@/lib/orders";
 import { useOrderStream } from "@/lib/order-stream";
-import { localDate, money } from "@/lib/format";
+import { calendarDate, localDate, money } from "@/lib/format";
 import { strings as s } from "@/lib/strings";
 import { Button } from "./ui/button";
 import { Badge, Field, Modal, Problem } from "./workspace";
@@ -384,7 +384,13 @@ export function OrderDetail({ tenant, id }: { tenant: string; id: string }) {
           )}
           {shipment.estimated_delivery && (
             <p>
-              {s.orders.eta}: {shipment.estimated_delivery}
+              {s.orders.eta}:{" "}
+              <time
+                dateTime={shipment.estimated_delivery}
+                title={calendarDate(shipment.estimated_delivery).tooltip}
+              >
+                {calendarDate(shipment.estimated_delivery).label}
+              </time>
             </p>
           )}
           <ol>

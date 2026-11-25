@@ -1,4 +1,69 @@
 export const strings = {
+  catalog: {
+    title: "Catalog",
+    hint: "Keep product details and prices ready for your next order.",
+    create: "Create product",
+    edit: "Edit product",
+    search: "Search SKU or product name",
+    activeFilter: "Product status",
+    all: "All products",
+    active: "Active",
+    archived: "Archived",
+    name: "Product name",
+    description: "Description (optional)",
+    price: "Price",
+    priceHint: "Use up to two decimal places, for example 249.50.",
+    currency: "Currency",
+    immutable:
+      "SKU and currency cannot be changed after creation. New products start active.",
+    archive: "Archive product",
+    unarchive: "Unarchive product",
+    save: "Save product",
+    empty: "No products match these filters.",
+    saved: "Product saved.",
+    invalidPrice:
+      "Enter a nonnegative price with at most two decimals and ten whole-number digits.",
+    duplicate: "That SKU already exists. Choose another SKU.",
+    confirmArchive:
+      "Archiving stops new orders from using this SKU. Existing orders keep their snapshots.",
+    confirmUnarchive: "This SKU will become available for new orders.",
+  },
+  inventory: {
+    title: "Inventory",
+    hint: "See available and reserved stock in each warehouse.",
+    warehouses: "Warehouses",
+    warehouse: "Warehouse",
+    createWarehouse: "Create warehouse",
+    code: "Warehouse code",
+    name: "Warehouse name",
+    region: "Region",
+    add: "Add inventory",
+    available: "Available",
+    reserved: "Reserved",
+    threshold: "Low-stock threshold",
+    low: "Low stock",
+    adjust: "Adjust stock",
+    delta: "Quantity change",
+    reason: "Adjustment reason",
+    adjustHint:
+      "Use a positive number to add stock or a negative number to remove it. Reserved stock is unchanged.",
+    result: (n: number) => `Available after adjustment: ${n}`,
+    save: "Save adjustment",
+    empty: "No inventory yet. Add a product and warehouse first.",
+    warehousesEmpty: "No warehouses yet.",
+    invalidDelta:
+      "Enter a nonzero whole number that keeps available stock between 0 and 2,147,483,647.",
+    reasonRequired: "Enter a reason for this stock change.",
+    added: "Inventory saved.",
+    adjusted: "Stock adjustment saved.",
+    warehouseCreated: "Warehouse created.",
+    choose: "Choose a warehouse",
+    warehouseHelp: "Warehouse choices follow the current warehouse page below.",
+    quantityInvalid: "Enter a whole number from 0 to 2,147,483,647.",
+    codeConflict: "That warehouse code already exists.",
+    duplicate:
+      "Stock for this SKU and warehouse already exists. Adjust the existing row.",
+  },
   orders: {
     title: "Orders",
     hint: "Follow each order from confirmation to delivery.",
@@ -170,13 +235,14 @@ export const strings = {
   homeTitle: "Your workspace is ready",
 
   homeHint:
-    "You're securely signed in to your store. More tools for your daily orders are coming soon.",
+    "Manage your orders, products and warehouse stock from one workspace.",
 
   foundation: "Your workspace",
 
   emptyTitle: "A fresh start",
 
-  emptyHint: "There is nothing to show here yet.",
+  emptyHint:
+    "Choose Orders, Catalog or Inventory from the navigation to get started.",
 
   customerTitle: "Seller access required",
 
@@ -241,6 +307,16 @@ export const strings = {
   },
 
   errors: {
+    product_sku_conflict: "That SKU already exists. Choose another SKU.",
+    negative_stock:
+      "Stock changed while you were editing. Refresh and enter a smaller reduction.",
+    stock_out_of_range: "The adjustment exceeds the supported stock limit.",
+    warehouse_code_conflict: "That warehouse code already exists.",
+    inventory_conflict: "Inventory for this SKU and warehouse already exists.",
+    product_required: "Create this SKU in the catalog before adding stock.",
+    unknown_or_inactive_sku:
+      "One or more SKUs are unknown or archived. Check the catalog.",
+    currency_mismatch: "Product currencies must match the order currency.",
     not_found: "This record was not found.",
     conflict:
       "This change conflicts with the current record. Refresh and try again.",

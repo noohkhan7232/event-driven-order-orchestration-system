@@ -1,4 +1,5 @@
 "use client";
+import { cloneElement, useId } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Button } from "@/components/ui/button";
 import { strings as s } from "@/lib/strings";
@@ -42,19 +43,29 @@ export function Field({
   error,
 }: {
   label: string;
-  children: React.ReactElement;
+  children: React.ReactElement<{
+    id?: string;
+    "aria-invalid"?: boolean;
+    "aria-describedby"?: string;
+  }>;
   error?: string;
 }) {
+  const generatedId = useId();
+  const id = children.props.id || generatedId;
   return (
-    <label className="space-y-2">
-      <span>{label}</span>
-      {children}
+    <div className="space-y-2">
+      <label htmlFor={id}>{label}</label>
+      {cloneElement(children, {
+        id,
+        "aria-invalid": !!error,
+        "aria-describedby": error ? id + "-error" : undefined,
+      })}
       {error && (
-        <span className="field-error block" role="alert">
+        <span id={id + "-error"} className="field-error block" role="alert">
           {error}
         </span>
       )}
-    </label>
+    </div>
   );
 }
 export function Problem({

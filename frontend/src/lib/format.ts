@@ -13,3 +13,19 @@ export const localDate = (date: string, locale?: string) => ({
     timeStyle: "long",
   }).format(new Date(date)),
 });
+
+// A calendar ETA has no instant: keep its day stable in every visitor timezone.
+export const calendarDate = (date: string, locale?: string) => {
+  const value = new Date(date + "T00:00:00Z");
+  return {
+    label: new Intl.DateTimeFormat(locale, {
+      dateStyle: "medium",
+      timeZone: "UTC",
+    }).format(value),
+    tooltip:
+      new Intl.DateTimeFormat("en-IN", {
+        dateStyle: "full",
+        timeZone: "UTC",
+      }).format(value) + " IST",
+  };
+};
