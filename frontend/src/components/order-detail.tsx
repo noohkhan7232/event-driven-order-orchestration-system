@@ -371,7 +371,9 @@ export function OrderDetail({ tenant, id }: { tenant: string; id: string }) {
           <p>
             {shipment.carrier} Â· <Badge status={shipment.status} />
           </p>
-          <p>{shipment.tracking_number || s.orders.unknown}</p>
+          <p className="break-all">
+            {shipment.tracking_number || s.orders.unknown}
+          </p>
           {safeLink(shipment.tracking_url) && (
             <a
               className="underline text-teal-900 break-all"

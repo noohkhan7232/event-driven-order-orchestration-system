@@ -33,7 +33,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(0, "offline");
   }
   if (!response.ok) {
-    let code = "unknown";
+    let code = response.status === 422 ? "validation_error" : "unknown";
     try {
       const value: unknown = await response.json();
       if (
