@@ -1,8 +1,9 @@
-# Phase 4 dashboard — task 4.1
+# Phase 4 dashboard — tasks 4.1–4.3
 
-24 November 2026, Asia/Calcutta. Branch: `phase-4-dashboard`, created from
-`main` at `f8208b8` after a fast-forward pull. Scope is **4.1 only**. The
-remaining Phase 4 screens and acceptance experiments are deferred.
+25 November 2026, Asia/Calcutta. Branch: `phase-4-dashboard`, based on
+`main` at `f8208b8`. Tasks **4.1, 4.2 and 4.3 are complete** within the existing
+backend contract and the read-only additions listed below. Tasks 4.4–4.7 remain
+outside this session. This is one current-state report, including foundation evidence.
 
 # Part A — Architecture and operations
 
@@ -23,7 +24,7 @@ flowchart LR
 strict TypeScript, Tailwind, owned shadcn-style Radix/CVA components, TanStack
 Query, React Hook Form and Zod. English UI strings live in `src/lib/strings.ts`.
 Formatting helpers use `en-IN` currency grouping and local dates with an IST
-tooltip. There are no order-management or settings forms in this task.
+tooltip. Orders, catalog and warehouse stock are implemented; settings forms remain deferred.
 
 ```mermaid
 sequenceDiagram
@@ -42,10 +43,11 @@ sequenceDiagram
   N-->>B: Safe shell or forwarded API status/body
 ```
 
-The only backend addition is `GET /api/v1/tenants/me`, needed for the store
-name in the top bar. It has no tenant selector and returns the existing
-`TenantRead` projection for an active staff JWT. Existing business operations,
-schemas, migrations and payment/shipping workers are unchanged.
+Backend additions are read-only: `GET /api/v1/tenants/me` for store metadata,
+`GET /api/v1/orders/{order_id}/activity` for a safe staff history/refund projection,
+and paginated `GET /api/v1/inventory/warehouses` for scoped warehouse choices.
+There are no migrations or changes to payment, refund, shipping, inventory or
+order business behavior. UI mutations call the existing APIs through the BFF.
 
 ## A2. Security model
 
@@ -96,47 +98,66 @@ have not been verified; serverless launchers that bypass the preload are unsuppo
 
 ## A3. Screen and route inventory
 
-| Route | Access | Backing operation | States |
+| Route | Access | Backing API | States/actions |
 |---|---|---|---|
-| `/` | Public | Redirect to guarded workspace | Anonymous goes to login |
-| `/login` | Public | BFF login → API auth/login | Validation, invalid credentials, pending, quota countdown, expired/registered notices |
-| `/tenants/register` | Public | BFF register → API tenants/register | Name/email/password validation, optional slug/invite, registration_closed, pending |
-| `/dashboard` | Tenant admin/vendor | API auth/me and tenants/me, server-side | Store/user shell, empty state, loading skeleton, error boundary |
-| `/platform` | Platform admin only | API auth/me | Platform-only foundation placeholder |
-| `/access-denied` | Public explanatory screen | No business call | Friendly customer-role message |
-| `/suspended` | Public explanatory screen | Reached on tenant_suspended | Dedicated contact-administrator message |
-| `/rate-limited` | Public explanatory screen | Server session 429 redirect | Bounded visible retry countdown and disabled retry button |
-| `/bff/auth/logout` | Same-origin POST | Cookie clear only | Clears session and query cache |
-| `/bff/auth/expired` | Expiry redirect | Cookie clear only | Login with expiry notice |
-| `/bff/api/[...path]` | Staff/owner/platform policy, except public tracking reads | Allow-listed API operations | Status/quota forwarding, role denial, 401/403 handling, bounded JSON/SSE |
-| `/health` | Public operational probe | Frontend process only | JSON health; does not assert backend readiness |
+|`/login`, `/tenants/register`|Public|BFF auth/login and tenants/register|Validated forms, optional invite, closed registration, quota countdown|
+|`/dashboard`|Tenant admin/vendor|auth/me, tenants/me|Guarded workspace/store identity|
+|`/orders`|Tenant admin/vendor|orders GET, orders/stream|Server pagination, status/local-date/exact-reference filters; direct UUID lookup; Live/polling, loading/empty/errors|
+|`/orders/new`|Tenant admin/vendor|orders POST|SKU/quantity lines, optional buyer/reference, prepaid/COD; retry-stable idempotency key; creates a real store order|
+|`/orders/[id]`|Tenant admin/vendor|orders/{id}, activity, stream|Buyer/items, payment expiry/provider status/refunds, saga and shipment observations; confirm cancel/tracking/events/rotation; copy link|
+|`/catalog`|Tenant admin/vendor|products GET/POST/PATCH|Prefix search, active filter, pagination, create, confirmed archive/unarchive|
+|`/catalog/[id]`|Tenant admin/vendor|products/{id} GET/PATCH|Name/description/price/active; immutable SKU and stored currency; clean missing-record error|
+|`/inventory`|Tenant admin/vendor|inventory GET/POST/adjustments; warehouses GET/POST|Paged stock and warehouses, low-stock warning, required adjustment reason, local/backend negative-stock checks, inline duplicate errors|
+|`/platform`|Platform admin only|auth/me|Foundation placeholder; no tenant workspace|
+|`/access-denied`, `/suspended`, `/rate-limited`|Explanatory|Session/error outcomes|Customer denial, paused store, bounded retry countdown|
+|`/bff/auth/logout`, `/bff/auth/expired`|Session boundary|Cookie/API recheck|Same-origin POST logout; expiry GET preserves a valid/refreshed session|
+|`/bff/api/[...path]`|Existing staff/owner/platform policy; public tracking reads exempt|Allow-listed API|Status/quota forwarding, CSRF and role guards, bounded bodies and SSE|
+|`/health`|Public operational probe|Frontend process|Does not assert API readiness|
 
-Admin navigation includes the planned seller sections. Vendor navigation hides
-owner-sensitive sections; customer accounts cannot enter the app. Platform
-accounts see only the platform section. Links for later tasks are visibly disabled
-and are not implemented business screens. Tenant callers cannot proxy platform
-operations; vendor callers cannot proxy owner settings, keys, webhooks or failed jobs.
+The shell enables Orders, Catalog and Inventory. Later sections remain visibly
+disabled. Vendor accounts cannot proxy owner settings, keys, webhooks or failed
+jobs; customer accounts cannot enter the seller workspace. Platform-only users
+are redirected away from tenant screens. API tenant isolation remains authoritative.
+
+Stock is a desktop semantic table and becomes labeled rows below 1024px. Product
+and order lists use responsive cards. Warehouse choices follow the visible warehouse
+page; change that page before opening Add inventory to select another group.
 
 ## A4. Live updates
 
 ```mermaid
 flowchart LR
-  Client[Future fetch-based SSE consumer] -->|Last-Event-ID| BFF[Unbuffered bounded stream]
-  BFF -->|visitor IP and server Bearer when private| API[Existing private/public SSE]
-  API --> BFF --> Client
-  Client -->|disconnect| Cancel[Await upstream cancellation]
+  Client[Fetch SSE hook] -->|Last-Event-ID| BFF[Bounded streaming BFF]
+  BFF -->|server Bearer and visitor IP| API[API order timeline stream]
+  API --> BFF --> Decoder[Frame decoder and dedupe]
+  Decoder --> Invalidate[Tenant-scoped query invalidation]
+  Invalidate --> Snapshot[Authoritative order/activity GET]
+  Poll[15 second polling backstop] --> Snapshot
 ```
 
-The foundation forwards Accept and Last-Event-ID, preserves event-stream content
-type, sets no-store/no-referrer and disables intermediary buffering. It reads on
-demand, enforces the 2 MiB per-response cap and propagates cancellation before
-the caller's cancellation completes. A capped stream ends with a transport error.
-Ordinary bodies are bounded before returning. The fetch headers deadline is 20s;
-this is not a claim of a total deadline for all streaming/body I/O.
+`useOrderStream` uses fetch, never a JavaScript bearer token. It handles fragmented
+LF/CRLF frames and heartbeats, keeps 64-bit cursors as strings/BigInt, deduplicates
+4096 recent IDs, and accepts late lower-ID observations. Events invalidate scoped
+snapshots rather than writing event payloads over newer order state. Invalidation
+keys begin with tenant identity. Initial reads and the activity projection establish
+state/history when a stream starts without an old cursor.
 
-Browser ordering/deduplication, reconnect/resume, Live indicators and polling
-fallback are **not implemented** here; they belong to 4.2/4.5. Those consumers must
-resume after disconnect or the stream cap rather than assuming an infinite stream.
+Disconnects reconnect after 1s with exponential backoff capped at 30s, resuming with
+Last-Event-ID. Partial frames are discarded between responses; malformed frames
+never enter the cache. Frames are bounded at 64KiB. The BFF still caps each stream
+at 2MiB and awaits upstream cancellation; the hook resumes after closure. Cleanup
+aborts the request and cancels/releases the reader. Cursors are component-memory
+only, with no local/session storage. HTTP401/403 lead to the session screens.
+
+Live means an accepted open event-stream response. A reconnecting label explains
+the 15s polling fallback; polling also remains a backstop while connected. Long-lived
+half-open connections, reconnect storms and many-tab load are not soak-tested.
+The BFF headers deadline remains20s, not a total SSE/body deadline.
+
+The activity API returns actual order transitions and shipment observations, plus
+latest persisted payment and refund statuses/timestamps. It does not manufacture
+historical provider transitions that the backend has no event table for. Raw audit
+payloads, checkout payloads, refund errors and free-form event diagnostics are excluded.
 
 ## A5. Configuration and builds
 
@@ -153,6 +174,7 @@ needed and upstream credentials must never be added to a client-exposed variable
 | BFF_TRUSTED_PROXY_IPS | Empty; comma-separated exact trusted socket peer addresses |
 | E2E_FRONTEND_URL | Test runner localhost:3000; match the actual browser origin |
 | API_PORT | Existing host override, used as 18000 on this Windows machine |
+| PUBLIC_TRACKING_BASE_URL | Existing backend setting; match the reachable API host/port for copied API links until the 4.5 buyer UI exists |
 | TRUSTED_PROXY_COUNT | API Compose environment 1 for the BFF hop |
 | NEXT_TELEMETRY_DISABLED | 1 in Docker; use 1 for local/CI verification |
 
@@ -191,6 +213,10 @@ Escape dismissal, desktop sidebar, semantic user menu and loading/empty/error st
 Long user/store names are constrained to avoid horizontal overflow. Reduced-motion
 preferences disable transitions/animations. Auxiliary text and input borders were
 darkened after the real contrast regression; no axe assertion was relaxed.
+
+Labels remain stable when validation errors appear; errors are linked by aria-describedby.
+Dialogs use Radix focus management and Escape dismissal; cancellations roll back
+optimistic state after failure and always refetch authoritative snapshots.
 
 Actual browser coverage and counts are in Part B. Comprehensive screen/device,
 keyboard and contrast verification for the unimplemented screens remains 4.6 work.
@@ -243,256 +269,242 @@ is retained rather than deleting audit/business data.
 
 ## A8. Deferred work and limits
 
-4.2 orders, 4.3 catalog/inventory, 4.4 settings/operations, 4.5 buyer tracking,
-4.6 comprehensive quality and 4.7 full proof/screenshots are not implemented in
-this session. There is no checkout, billing, team invitation management, password
-reset, marketing site, dark mode or broader localization. The existing backend
-remains the authority; no client role claim can grant API privileges.
-Successful auth submissions need JavaScript for the custom CSRF header. The native
-fallback uses POST and is rejected safely; it never places credentials in a URL.
+Tasks 4.4 settings/integrations/failed-jobs/platform controls,4.5 buyer tracking UI,
+4.6 comprehensive all-screen quality and 4.7 full proof/screenshots/README remain
+outside scope. No checkout JS, billing, team management, password reset, marketing,
+dark mode, analytics or broader localization was added.
 
-Production ingress/TLS, serverless deployment, multiple frontend replicas and a
-cross-browser/device matrix are not established by local Docker proof. Future query
-keys must still include tenant identity; cache clearing is not a replacement for
-backend isolation. Full buyer tracking will also need its public-link configuration
-and reconnect client work. BFF allow-list/role rules must be reviewed when new API
-prefixes are introduced, and the real IP proof rerun after Next/ingress changes.
+Stored product currency cannot be patched by the backend. New products start active;
+the edit toggle and archive/unarchive actions change that status afterward. Search
+by UUID uses the existing single-order endpoint; list date/status/reference filters
+apply to paginated reference searches. Product search follows the API's prefix
+matching. These are contract limits, not new backend behavior.
+
+Copied tracking links currently address the existing public API projection. The
+buyer-facing /track UI belongs to4.5. An API_PORT override also needs a matching
+backend PUBLIC_TRACKING_BASE_URL in the deployment override; copying preserves the
+API-provided URL. The browser proof does not follow that link (F5 is deferred).
+Payment/refund history limitations are in A4.
+The activity response has no pagination and remains subject to the BFF2MiB cap.
+Warehouse choices are paginated rather than silently assuming a tenant has <=20.
+
+Mutation authority stays in the API. Stock reduction is checked locally and again
+by the existing locked backend adjustment. A transport-failed unchanged order
+submission reuses its idempotency key; changed details get a fresh key. Native order
+form fallback is POST, so buyer fields are not placed in a URL if JavaScript stops.
+
+Production ingress/TLS, serverless launchers that bypass the socket preload,
+multiple frontend replicas, cross-browser/assistive-technology matrices and soak
+performance remain unverified. Successful auth requires JavaScript for CSRF headers;
+its native POST fallback remains safely rejected. No live external provider is tested.
 
 # Part B — Verification
 
 ## B1. Summary
 
-Task 4.1 is DONE. Tasks 4.2–4.7 are skipped by this session's explicit scope.
-No selected blocker remains. The report-only commit follows the four commits in
-B7; the completed session therefore has five commits. Nothing was pushed, merged
-or deployed to a hosted environment.
+Tasks 4.1–4.3 are DONE with the contract limits in A8/B6. This session implemented
+only 4.2 orders and 4.3 catalog/inventory/warehouses. Nothing was pushed or merged.
+The report-only commit follows the implementation commits listed in B7.
 
-The real Docker frontend passes four browser tests, including the F1/F11 foundation
-proofs. The final image runs as UID1000 on Node22.23.5. The local IP override is
-restored to false. All core application services are running and migrate exited0.
-Optional Mailpit/sink containers were already stopped after the Docker restart;
-they are not required by 4.1 and are not claimed as verified here.
+Final gates: frontend lint/format, strict typecheck, 62 tests in 15 files, production
+Docker build and API-type freshness pass. Backend ruff/format/mypy/OpenAPI pass;
+SQLite 617 passed/45 skipped; PostgreSQL+Redis 661 passed/1 skipped. Production
+coverage is 97.24%, with all 18 required modules >=90%. Five real Docker browser
+tests pass: F1–F4, F10, F11 plus foundation security controls. Runtime test-IP flag
+is restored to false and project workers are restored.
 
 ## B2. Task table
 
-| Task | Status | Evidence/commits |
+| Task | Status | Evidence |
 |---|---|---|
-|4.1 foundation/BFF/client/layout/IP/Compose/CI|DONE|69883dc API;4e3cb76 frontend;a52fbe1 integration;b534437 generated framework guidance; final gates below|
-|4.2 orders|SKIPPED|Outside this session|
-|4.3 catalog/inventory/warehouses|SKIPPED|Outside this session|
-|4.4 settings/integrations/operations|SKIPPED|Outside this session|
-|4.5 public tracking UI|SKIPPED|Only its existing API path is proxied/rate-tested here|
-|4.6 comprehensive quality|SKIPPED|Foundation checks do not complete all-screen quality work|
-|4.7 full e2e/screenshots/docs|SKIPPED|Only the 4.1 report and foundation browser subset are completed|
+|4.1 foundation/BFF/client/layout/IP/Compose/CI|DONE|69883dc,4e3cb76, a52fbe1, b534437,3134310; foundation controls rerun|
+|4.2 orders|DONE|ff393c4; filters/detail/actions/test-order/SSE;52 tests at its commit;613 backend passes then|
+|4.3 catalog/inventory/warehouses|DONE|Implementation commits in B7;62 frontend tests;617 SQLite/661 PostgreSQL passes;F2–F4/F10|
+|4.4 settings/integrations/operations|SKIPPED|Outside scope|
+|4.5 buyer tracking UI|SKIPPED|Existing public API only|
+|4.6 comprehensive quality|SKIPPED|Selected page checks do not complete all-screen work|
+|4.7 full e2e/screenshots/README|SKIPPED|Selected experiments and this cumulative report only|
 
 ## B3. Test evidence
 
-Frontend: **29 unit/integration tests across8 files**, no skips. Tests cover cookie
-flags/no token JSON, allow-list/traversal, both CSRF signals, fixed/chunked body limits,
-SSE cap/cancellation, header stripping including Connection-named fields, status/quota
-preservation, 401 handling, vendor/customer/platform gates, expiry/rate/suspension
-navigation, query-cache clearing, API query/Headers semantics, forms/invite/error
-mapping, countdown, locale helpers and escaped/CSP-compatible toasts.
+Frontend: **62 tests across 15 files**, no skips. Foundation tests retain cookie,
+CSRF, allow-list/traversal, hop-by-hop headers, bounded/chunked bodies, SSE cap and
+cancellation, expiry/role/quota handling, session-cache clearing and escaped toasts.
+New tests cover server order filters/pagination, bigint SSE cursors/fragmentation/
+replay/reconnect/resume/unmount, major order states and known failure explanations,
+confirmation/rollback, tracking/events/rotation, retry-stable idempotency keys,
+product decimals/immutability/archive, warehouse/inventory forms and duplicate errors,
+required stock reasons, local negative/overflow guards and backend negative_stock
+handling. A calendar-date regression verifies that estimated-delivery dates localize
+without shifting their day across timezones.
 
-Unit fetch is disabled by default unless explicitly mocked. The browser tests use
-only the local frontend/API; no real provider, SMTP or external HTTP service is
-called by these tests. Auth tracing is disabled. Passwords are random disposable
-fixtures, never printed. Browser storage has no JWT; document.cookie is empty while
-the session cookie is confirmed httpOnly by privileged test inspection.
+Backend adds three activity projection cases and four warehouse matrix cases.
+These check tenant scope, staff/customer/key behavior, anonymous rejection, exact
+safe fields, pagination/bounds and absence of seeded diagnostics/secrets. Existing
+foreign-resource and route-registry assertions remain strict.
 
-Axe: zero serious/critical findings on registration, login and the authenticated
-shell. The same browser flow verifies no horizontal overflow at360/768/1280,
-including a long owner name, drawer open/Escape close and logout access removal.
-This is not an all-page/device/browser certification. Frontend coverage was not
-measured. Backend PostgreSQL production coverage is97.24%; all18 required modules
-meet90%, and the modified tenancy endpoint module is100% covered.
+TDD/control evidence:
 
-Observed red-to-green controls:
+- Missing activity endpoint: three failures 404; after projection/isolation work 10 passed.
+- Missing warehouse-list route: four failures 422 (dynamic UUID route); final matrix passes.
+- New order/catalog modules: tests failed to resolve before implementation; final tests pass.
+- Validation text changed a field's accessible label: a new stock test failed to find
+  Quantity change after an error; fixed the shared component, preserving the assertion.
+- An optimistic cancellation conflict restores the pre-action order and keeps confirmation open.
 
-| Control | Before | Final correction |
-|---|---|---|
-|Tenant metadata endpoint|4 failures:404|4 new matrix cases plus existing isolation controls:11 passed|
-|Chunked request size|Expected413, got502|Request overflow separated from upstream response overflow|
-|Backend forbidden code|Generic unknown error|Correct friendly auth mapping|
-|SSE cap/cancellation|Oversized stream accepted; first transform delayed cancellation|Pull-based bounded stream awaits upstream cancel|
-|Connection-named headers|Whitelisted hop field forwarded|Dynamic hop-name exclusion on both sides|
-|Client URL/Headers options|2 failures|Validate normalized pathname, preserve query values and Headers entries|
-|Session cache|Old fixture data remained after logout|Auth changes clear shared query cache|
-|SSR throttling/metadata expiry|Generic error|Dedicated countdown and expiry redirect from either lookup|
-|Expiry helper|2 failures: valid GET cleared session, no API recheck|Only invalid/absent sessions clear; valid/refreshed sessions survive|
-|Native forms|2 failures: missing POST|Explicit POST/action and real no-JS rejection proof|
-|Contrast|Axe footer ratio4.43 vs4.5|Darker auxiliary text/borders; assertion retained|
-|Desktop overflow|Strict width assertion failed with long name|minmax(0,1fr) and min-width0; no overflow-hiding workaround|
+Real browser axe reports zero serious/critical violations on login, registration,
+shell, catalog list/detail, inventory, orders list/detail. The same relevant pages
+pass horizontal-overflow checks at 360/768/1280. Foundation drawer Escape/logout
+checks remain passing. This is not an all-device/keyboard/assistive-technology audit.
+Frontend coverage percentage is not measured. Backend production coverage:97.24%.
+Unit fetch is disabled unless mocked; browser tests call only the local Docker stack.
 
 ## B4. Raw gates and build inventory
 
-Final Docker RUN chain is `npm run lint && npm run typecheck && npm run test && npm run build`;
-it exited0 on the exact pinned Node22 image. API freshness is checked separately
-against repository docs, which are deliberately outside the frontend image context.
+The final Node 22.23.5 Alpine Docker builder ran lint, typecheck, all frontend tests
+and the production build. API-type freshness
+runs on Windows against repository OpenAPI outside the frontend build context.
 
 ```text
 All matched files use Prettier code style!
 Types generated successfully
-Test Files  8 passed (8)
-Tests  29 passed (29)
-Next.js 16.4.6 (webpack)
-Compiled successfully; production image Built
-Ruff: All checks passed!
-Ruff format: passed
-Mypy: Success: no issues found in 176 source files
+Test Files  15 passed (15)
+Tests  62 passed (62)
+Compiled successfully; production frontend image Built
+API types are fresh
+All checks passed!
+221 files already formatted
+Success: no issues found in 178 source files
 OpenAPI export is fresh
-SQLite: 610 passed, 45 skipped in 311.19s (0:05:11)
-PostgreSQL+Redis: 654 passed, 1 skipped in 2016.93s (0:33:36)
-Backend production:97.24%; all18 required modules >=90%
-Compose controls:6 passed; environment uniqueness:1 passed
+SQLite: 617 passed, 45 skipped in 427.29s
+PostgreSQL+Redis: 661 passed, 1 skipped in 1057.82s (0:17:37)
+TOTAL production: 97.24% (required >=90%)
+PASS app/core/integration_guard.py: 100.00%
+PASS app/providers/manual.py: 100.00%
+PASS app/services/shipping.py: 100.00%
+PASS app/api/v1/endpoints/shipments.py: 93.85%
+PASS app/core/ssrf.py: 96.30%
+PASS app/services/outbound_webhooks.py: 92.16%
+PASS app/services/webhook_delivery.py: 97.78%
+PASS app/api/v1/endpoints/webhook_endpoints.py: 100.00%
+PASS app/schemas/webhooks.py: 100.00%
+PASS app/notifications/channels.py: 93.51%
+PASS app/notifications/service.py: 91.74%
+PASS app/api/v1/endpoints/notification_settings.py: 96.30%
+PASS app/services/tracking.py: 97.73%
+PASS app/api/v1/endpoints/public_tracking.py: 100.00%
+PASS app/services/sse.py: 100.00%
+PASS app/api/v1/endpoints/streams.py: 100.00%
+PASS app/schemas/failed_jobs.py: 100.00%
+PASS app/api/v1/endpoints/failed_jobs.py: 100.00%
 ```
 
-The final Windows production build also exits0. Dev and standalone startup smoke
-results, API-type positive/negative freshness, exact pins and bundle sweep:
+Next 16 webpack emits a route inventory rather than a per-route KB table:
 
 ```text
-PASS Windows npm run start: health200; API proxy404; socket preload; local loopback only
-PASS Windows npm run dev: health200; API proxy404; socket preload; local loopback only
-PASS generated API freshness rejects modified types
-PASS generated API types restored and fresh
-PASS production startup test-IP flag true: refused
-PASS production startup test-IP flag false: starts
-PASS exact direct dependency pins and lockfile agreement
-PASS client bundle marker sweep: five server-only markers absent
+/ /_not-found /access-denied /bff/api/[...path]
+/bff/auth/expired /bff/auth/login /bff/auth/logout /bff/auth/register
+/catalog /catalog/[id] /dashboard /health /inventory /login
+/orders /orders/[id] /orders/new /platform /rate-limited /suspended
+/tenants/register
+All app routes dynamic; Proxy middleware
 ```
 
-Next16 emits a route inventory without a per-route KB table in this build mode.
-The following is its real inventory; byte counts below are separately measured
-artifact totals, not a claim about initial-page transfer size.
-
-```text
-Route (app)
-┌ ƒ /
-├ ƒ /_not-found
-├ ƒ /access-denied
-├ ƒ /bff/api/[...path]
-├ ƒ /bff/auth/expired
-├ ƒ /bff/auth/login
-├ ƒ /bff/auth/logout
-├ ƒ /bff/auth/register
-├ ƒ /dashboard
-├ ƒ /health
-├ ƒ /login
-├ ƒ /platform
-├ ƒ /rate-limited
-├ ƒ /suspended
-└ ƒ /tenants/register
-
-
-ƒ Proxy (Middleware)
-
-ƒ  (Dynamic)  server-rendered on demand
-```
-
-| Artifact inventory | Files | Raw bytes | Sum of per-file gzip bytes |
+| Client artifact | Files | Raw bytes | Sum of per-file gzip bytes |
 |---|---:|---:|---:|
-|All client JavaScript chunks|42|1,204,425|380,484|
-|Client CSS|1|15,673|4,304|
+|JavaScript chunks|51|1,321,965|424,913|
+|CSS|1|20,390|5,107|
 
-Gzip uses deterministic local compression and is not a network waterfall or Brotli
-measurement. The sweep checks API_INTERNAL_URL, BFF_ALLOW_TEST_IP,
-BFF_TRUSTED_PROXY_IPS, CREDENTIALS_ENCRYPTION_KEY and oos_session are absent from
-client JS. No real credential was supplied to the frontend build.
+Measured in the final production container, Node v22.23.5, UID1000.
+These are all-chunk artifact totals, not first-load/wire performance. Five known
+server-only markers are absent: API_INTERNAL_URL, BFF_ALLOW_TEST_IP,
+BFF_TRUSTED_PROXY_IPS, CREDENTIALS_ENCRYPTION_KEY, oos_session. No production credential
+is supplied to the frontend build.
 
-Exact selected versions (npm registry verified on24 November2026):
-
-| Package | Pin |
-|---|---|
-|next|16.4.6|
-|react|19.3.1|
-|react-dom|19.3.1|
-|@tanstack/react-query|5.108.4|
-|react-hook-form|7.92.0|
-|zod|4.6.7|
-|tailwindcss|4.3.5|
-|typescript|5.9.3|
-|eslint|10.15.0|
-|typescript-eslint|8.74.0|
-|@next/eslint-plugin-next|16.4.6|
-|eslint-plugin-react-hooks|7.1.1|
-|prettier|3.10.1|
-|openapi-typescript|7.13.0|
-|vitest|5.1.1|
-|@testing-library/react|16.3.3|
-|@playwright/test|1.65.1|
-|@axe-core/playwright|4.14.0|
-
-The clean current dependency install reports341 added/348 audited and0 vulnerabilities;
-`npm ls --all` exits0. Initial TypeScript7 conflicted with the generator's5.x peer;
-verified5.9.3 is used. The legacy Next ESLint preset was replaced with compatible
-current plugins rather than shipping EOL ESLint9 or forcing peer dependencies.
+Dependencies/lockfile are unchanged from 4.1: exact Next 16.4.6, React19.3.1,
+TypeScript 5.9.3, ESLint 10.15.0, Vitest 5.1.1, Playwright 1.65.1, TanStack Query5.108.4,
+RHF 7.92.0, Zod 4.6.7 and Tailwind 4.3.5. The24 November foundation clean install had
+341 added/348 audited, zero vulnerabilities and npm ls --all exit0; that registry
+audit was not rerun for this dependency-unchanged session. Foundation Windows
+start/dev socket-preload smoke, negative/positive API freshness and production
+refusal of the test-IP flag remain established4.1 evidence.
 
 ## B5. Real Docker browser proof and final runtime
 
 ```text
+PASS F2 warehouse/product/inventory UI; adjustment +5; negative result rejected; axe/responsive catalog/detail/inventory
+PASS F3 order appears and reaches fulfillment on already-open Live list without manual refresh; recorded saga timeline
+PASS F4 COD tracking -> shipped -> delivered; payment Collected
+PASS F10 foreign order/product clean not-found; tenant lists isolated
 PASS native no-JavaScript auth uses POST; CSRF rejection; no credentials in URL/response
 PASS F1 foundation; a11y login/register/shell zero serious/critical; widths360/768/1280; httpOnly session; logout guarded
 PASS F11: login and public tracking independently rate-limited per visitor THROUGH BFF; spoofed XFF stripped; visible countdown
 PASS BFF CSP nonce/header/CSRF/path guards and retry screen on real server
-  4 passed (33.3s)
+5 passed (1.7m)
 ```
 
-| Experiment | Result in this scope |
+| Experiment | Result |
 |---|---|
-|F1|PASS: UI register/login/store shell/logout and guard; also foundation axe/width checks|
-|F11|PASS: per-visitor login and public tracking limits through BFF; visible countdown|
-|F2–F10|NOT RUN: later-task UI is not implemented|
-|F12|NOT RUN as a real multi-role/suspended browser experiment; foundation role/session/BFF unit controls pass|
-|Additional foundation checks|PASS: nonce/static headers/CSRF/path/retry page; no-JS POST keeps credentials out of URLs|
+|F1|PASS registration/login/store shell/logout, guard, foundation axe/responsiveness|
+|F2|PASS warehouse/product/inventory creation, +5 adjustment, negative rejection|
+|F3|PASS prepaid order appears/progresses to fulfillment on an already-open Live list without manual refresh; persisted timeline|
+|F4|PASS COD tracking edit, shipped, delivered, payment Collected|
+|F5|NOT RUN buyer UI/link rotation end-to-end; staff rotation has unit proof|
+|F6–F9|NOT RUN later settings/operations UI|
+|F10|PASS foreign order/product clean missing-record responses; both lists isolated|
+|F11|PASS independent login/tracking visitors, spoof stripping, visible countdown|
+|F12|NOT RUN full real vendor/suspension experiment; foundation role/session/BFF unit controls remain passing|
 
-F11 uses invalid tracking capabilities and expects the API's uniform404 before
-quota exhaustion. It proves route-level per-visitor limiting, not the unimplemented
-buyer page. Local test IPs are explicitly gated; a constant spoofed client XFF does
-not merge the two independent visitor buckets.
+F11 uses invalid public tracking tokens and checks uniform404 before429, proving
+API/BFF visitor limiting rather than buyer-page rendering. Synthetic visitor headers
+are honored only with the local/test server flag; final default is false. Fixture
+runs use distinct visitor identities so persistent registration quotas do not couple
+independent experiments. No rate limits or assertions were disabled.
 
-Final default-state inspection (raw):
+Final runtime inspection:
 
 ```text
-Node v22.23.5; test_ip=false; environment=local
-1000
+Node v22.23.5 uid=1000 test_ip=false environment=local
 API trusted_proxy_count=1
 127.0.0.1:3000
-SERVICE               STATE     STATUS
-api                   running   Up 5 hours
-frontend              running   Up 4 hours (healthy)
-integrations-worker   running   Up 7 seconds
-mailpit               exited    Exited (255) 6 hours ago
-migrate               exited    Exited (0) 8 seconds ago
-outbox-relay          running   Up 8 seconds
-postgres              running   Up 5 hours (healthy)
-rabbitmq              running   Up 5 hours (healthy)
-redis                 running   Up 5 hours
-scheduler             running   Up 6 seconds
-webhook-sink          exited    Exited (255) 6 hours ago
-worker                running   Up 7 seconds
+api running Up 38 minutes
+frontend running Up 46 seconds (healthy)
+integrations-worker running Up 3 minutes
+mailpit exited Exited (255) 16 hours ago
+migrate exited Exited (0) 48 seconds ago
+outbox-relay running Up 3 minutes
+postgres running Up 54 minutes (healthy)
+rabbitmq running Up 54 minutes (healthy)
+redis running Up 54 minutes
+scheduler running Up 3 minutes
+webhook-sink exited Exited (255) 16 hours ago
+worker running Up 3 minutes
 ```
 
-Core workers were restored after memory-constrained verification. Frontend health
-is a process probe; API connectivity is independently exercised by real browser
-registration/login and the Windows public-proxy smoke. No frontend test flag stays on.
+Optional Mailpit/sink are not needed for these selected flows and are not claimed
+as verified. No live Razorpay/email/external delivery was exercised.
 
 ## B6. Backend additions and gaps
 
-**Addition:** `GET /api/v1/tenants/me` in `app/api/v1/endpoints/tenancy.py` returns
-only the current active tenant's existing public metadata for ADMIN/VENDOR JWTs.
-It has no caller-supplied tenant selector. Anonymous, customer, integration key,
-platform-only and suspended cases are denied. The matrix reads two separate tenants
-and checks the exact response/no private hash or password fields. No migration or
-existing business-handler behavior change was needed. OpenAPI and generated types
-include the endpoint and pass freshness checks.
+| Read-only addition | Reason | Authority/projection |
+|---|---|---|
+|GET tenants/me (4.1)|Store name/metadata in shell|Active staff JWT; existing TenantRead; no selector/secrets|
+|GET orders/{id}/activity (4.2)|Existing OrderRead lacked timeline, shipment observations and refunds|Existing OrderService scope/ownership, staff or scoped integration; explicit status/time/amount fields; no diagnostics/payloads|
+|GET inventory/warehouses (4.3)|Creation existed but no list/choices|inventory:read, tenant filter, deterministic code/ID ordering, limit1–100/offset, explicit id/code/name/region|
 
-**Later gap:** the current contract exposes warehouse creation but no warehouse-list
-GET. Revisit that narrowly in4.3 rather than adding an endpoint preemptively now.
-No other backend addition was made.
+All three are documented in OpenAPI/generated types and tested for isolation and
+safe output. No database migration, payment/shipping worker change or backend
+business mutation was introduced.
+
+Contract gaps/limits: product PATCH excludes currency/SKU; create defaults active.
+Order list has no ID query, so exact UUID search uses the existing detail GET;
+other list filters apply to reference queries. Payment/refund snapshots are not a
+complete historical provider-event journal. Activity history has no pagination.
+These limits are surfaced/documented rather than changing backend behavior.
 
 ## B7. Source diff and commits
 
-Snapshot against main before this standalone report-only commit:
+Current implementation snapshot before this standalone report-only commit:
 
 ```text
 .dockerignore                                     |    1 +
@@ -500,11 +512,18 @@ Snapshot against main before this standalone report-only commit:
  .gitattributes                                    |    3 +
  .github/workflows/ci.yml                          |   21 +
  README.md                                         |   52 +
+ app/api/v1/endpoints/inventory.py                 |   29 +-
+ app/api/v1/endpoints/orders.py                    |   50 +-
  app/api/v1/endpoints/tenancy.py                   |   15 +-
+ app/schemas/inventory.py                          |    9 +
+ app/schemas/orders.py                             |   26 +
+ app/tests/test_dashboard_activity.py              |   71 +
  app/tests/test_dashboard_tenant.py                |   79 +
- app/tests/test_tenant_isolation.py                |    1 +
+ app/tests/test_dashboard_warehouses.py            |   48 +
+ app/tests/test_tenant_isolation.py                |    4 +
  docker-compose.yml                                |   21 +-
- docs/openapi.json                                 |   65 +
+ docs/openapi.json                                 |  453 ++
+ docs/reports/phase-4-report.md                    |  695 +++
  frontend/.dockerignore                            |    8 +
  frontend/.env.example                             |    7 +
  frontend/.gitignore                               |    8 +
@@ -515,19 +534,26 @@ Snapshot against main before this standalone report-only commit:
  frontend/AGENTS.md                                |    9 +
  frontend/Dockerfile                               |   20 +
  frontend/components.json                          |   19 +
+ frontend/e2e/catalog-orders.spec.ts               |  213 +
  frontend/e2e/foundation.spec.ts                   |  210 +
  frontend/eslint.config.mjs                        |   29 +
  frontend/next.config.ts                           |   26 +
  frontend/package-lock.json                        | 6458 +++++++++++++++++++++
  frontend/package.json                             |   64 +
- frontend/playwright.config.ts                     |   15 +
+ frontend/playwright.config.ts                     |   21 +
  frontend/postcss.config.mjs                       |    2 +
  frontend/scripts/generate-api.mjs                 |   15 +
  frontend/scripts/ingress.cjs                      |   42 +
  frontend/scripts/start.mjs                        |   26 +
+ frontend/src/app/(app)/catalog/[id]/page.tsx      |   12 +
+ frontend/src/app/(app)/catalog/page.tsx           |    8 +
  frontend/src/app/(app)/dashboard/page.tsx         |   18 +
+ frontend/src/app/(app)/inventory/page.tsx         |    8 +
  frontend/src/app/(app)/layout.tsx                 |   15 +
  frontend/src/app/(app)/loading.tsx                |   13 +
+ frontend/src/app/(app)/orders/[id]/page.tsx       |   12 +
+ frontend/src/app/(app)/orders/new/page.tsx        |    8 +
+ frontend/src/app/(app)/orders/page.tsx            |    8 +
  frontend/src/app/(app)/platform/page.tsx          |   13 +
  frontend/src/app/(auth)/access-denied/page.tsx    |   13 +
  frontend/src/app/(auth)/layout.tsx                |   22 +
@@ -542,32 +568,48 @@ Snapshot against main before this standalone report-only commit:
  frontend/src/app/bff/auth/register/route.ts       |    1 +
  frontend/src/app/error.tsx                        |   12 +
  frontend/src/app/global-error.tsx                 |   15 +
- frontend/src/app/globals.css                      |   89 +
+ frontend/src/app/globals.css                      |  155 +
  frontend/src/app/health/route.ts                  |    3 +
  frontend/src/app/layout.tsx                       |   26 +
  frontend/src/app/page.tsx                         |    4 +
  frontend/src/components/auth-form.tsx             |  169 +
+ frontend/src/components/catalog.tsx               |  288 +
+ frontend/src/components/create-order.tsx          |  143 +
  frontend/src/components/empty-state.tsx           |   15 +
  frontend/src/components/error-notice.tsx          |   31 +
+ frontend/src/components/inventory.tsx             |  401 ++
+ frontend/src/components/order-detail.tsx          |  430 ++
+ frontend/src/components/orders-list.tsx           |  139 +
  frontend/src/components/providers.tsx             |   35 +
  frontend/src/components/rate-limit-notice.tsx     |   31 +
- frontend/src/components/shell.tsx                 |  138 +
- frontend/src/components/toasts.tsx                |   40 +
+ frontend/src/components/shell.tsx                 |  144 +
+ frontend/src/components/toasts.tsx                |   56 +
  frontend/src/components/ui/button.tsx             |   34 +
+ frontend/src/components/workspace.tsx             |  131 +
  frontend/src/lib/api/client.ts                    |   76 +
- frontend/src/lib/api/generated.ts                 | 3591 ++++++++++++
- frontend/src/lib/format.ts                        |   15 +
+ frontend/src/lib/api/generated.ts                 | 3773 ++++++++++++
+ frontend/src/lib/catalog.ts                       |   54 +
+ frontend/src/lib/format.ts                        |   31 +
+ frontend/src/lib/order-stream.ts                  |  133 +
+ frontend/src/lib/orders.ts                        |   79 +
  frontend/src/lib/roles.ts                         |   26 +
  frontend/src/lib/server/bff.ts                    |  348 ++
  frontend/src/lib/server/session.ts                |   50 +
- frontend/src/lib/strings.ts                       |  152 +
+ frontend/src/lib/strings.ts                       |  355 ++
  frontend/src/lib/utils.ts                         |    3 +
  frontend/src/proxy.ts                             |   35 +
  frontend/tests/bff.test.ts                        |  335 ++
+ frontend/tests/calendar-date.test.ts              |   17 +
+ frontend/tests/catalog-ui.test.tsx                |  222 +
+ frontend/tests/catalog.test.ts                    |   49 +
  frontend/tests/client.test.ts                     |   98 +
  frontend/tests/expiry.test.ts                     |   34 +
  frontend/tests/forms.test.tsx                     |   90 +
  frontend/tests/ingress.test.ts                    |   48 +
+ frontend/tests/order-actions.test.tsx             |   92 +
+ frontend/tests/order-stream.test.tsx              |   47 +
+ frontend/tests/orders-ui.test.tsx                 |  164 +
+ frontend/tests/orders.test.ts                     |   72 +
  frontend/tests/server-only.ts                     |    1 +
  frontend/tests/session-cache.test.tsx             |   28 +
  frontend/tests/session.test.ts                    |   69 +
@@ -575,75 +617,83 @@ Snapshot against main before this standalone report-only commit:
  frontend/tests/toasts.test.tsx                    |   17 +
  frontend/tsconfig.json                            |   27 +
  frontend/vitest.config.ts                         |   21 +
- 80 files changed, 13167 insertions(+), 3 deletions(-)
+ 110 files changed, 17707 insertions(+), 7 deletions(-)
+```
 
+```text
+8fb54e1 feat(dashboard): add catalog and warehouse stock controls
+a2a4baa feat(api): expose scoped warehouse list for dashboard
+ff393c4 feat(dashboard): add orders and live saga workspace
+3134310 docs: add phase 4 dashboard documentation and verification report
 b534437 docs(frontend): retain generated Next.js agent guidance
 a52fbe1 build(dashboard): wire compose service and frontend CI
 4e3cb76 feat(dashboard): add secure BFF and seller foundation
 69883dc feat(api): expose scoped store metadata for dashboard
 ```
 
-Generated API types and npm lock data account for much of the mechanical diff.
-The report itself is committed alone after these four commits.
+No push, PR, merge or hosted deployment was performed. The report-only commit adds
+this coherent verification record after those implementation commits.
 
 ## B8. Deviations and corrected verification attempts
 
-- Only4.1 is in scope; disabled navigation is availability information, not completed
-  order/settings screens. The full Part4 experiment set is not claimed green.
-- Existing modified test: `app/tests/test_tenant_isolation.py::test_route_registry_has_no_unclassified_routes`
-  adds the new read route to the tenant set. Its exact route equality/policy checks
-  remain. No other existing backend test was changed or weakened. All frontend tests
-  are new; fixture/mock corrections retained their behavioral assertions.
-- Next16 uses `proxy.ts` for the requested middleware role. Its cookie-presence check
-  is optimistic; real authorization remains in server layout/BFF/API. The Node socket
-  preload is required because route handlers do not expose a reliable socket peer.
-- Proxy401 remains401 with cookie clearing/auth redirect metadata; the client navigates
-  to login. This preserves API status while implementing the requested expiry flow.
-- Owned shadcn-style button/Radix drawer source is used with components.json. Toasts
-  are an owned CSS-only implementation because the initial optional library injected
-  non-nonced styles. No remote component registry is needed at runtime.
-- The host default Node was24; an explicitly selected verified Node22.23.5 binary
-  was used for final host checks. Docker/CI pin22.23.5. No machine-wide Node install
-  or private environment file was overwritten.
-- Initial in-place lint dependency replacement hit an npm stale-tree peer conflict.
-  A clean generated dependency install resolved it without force/legacy-peer flags.
-- Parallel host/Docker builds exhausted the observed8 GB RAM. Duplicate attempts
-  were stopped; final gates run serially with one Next worker and limited builder
-  heap. Only this project's background workers were paused and then restored.
-- Port13000 became Windows-reserved after Docker restart. That setup attempt did
-  not reach browser assertions; final proof uses the default3000 loopback port.
-- A copy edit introduced CP1252 apostrophes. Webpack rejected invalid UTF-8; the file
-  was corrected/validated and line endings normalized. A stale-image browser run is
-  discarded. Only the successful rebuilt-image run above is final evidence.
-- Real contrast and desktop overflow failures were fixed in code; no axe threshold,
-  viewport assertion, retry/status expectation or role restriction was loosened.
-- `next dev` generated frontend/AGENTS.md during startup proof. Its origin was
-  checked in Next's generate-agent-files implementation and its guidance retained
-  in a separate documentation commit. No delegation was used.
-- Synthetic stores are retained with disposable unknown-to-users passwords; no
-  money/order history or unrelated volume was deleted. No real provider was called.
+Modified existing tests, with reasons:
+
+- app/tests/test_tenant_isolation.py::test_tenant_resource_isolation_matrix:
+  added a strict 404 assertion for a foreign order's new activity endpoint.
+- app/tests/test_tenant_isolation.py::test_route_registry_has_no_unclassified_routes:
+  classified the two new tenant GET routes; exact registry comparison is unchanged.
+
+No existing frontend/browser assertion was weakened or removed. A final shared
+formatting correction localizes date-only ETAs with an IST tooltip; its regression
+protects against visitor-timezone day shifts. New order tests
+wait for rendered server results rather than treating request initiation as completion.
+
+frontend/playwright.config.ts now assigns a synthetic visitor to each fixture run;
+the new multi-tenant helper gives each registering visitor a separate identity.
+Repeated local runs had correctly exhausted the persistent 5/hour registration bucket.
+The existing local-only IP gate supplies isolation; production limits and F11's
+strict 429/independence checks remain intact. A new example.test registration fixture
+was rejected by the existing validator and corrected to an example.com address.
+A tracking PATCH took 5.26s during host load; the new browser test now explicitly
+awaits that response and asserts 200 before checking dialog closure.
+
+One baseline Vitest worker failed to start under host memory pressure; the unchanged
+29-test foundation rerun passed after pausing this project's background workers.
+A backend baseline process had loaded old routes before OpenAPI regeneration, causing
+one freshness failure; that concurrent-edit mistake was corrected by running against
+stable sources. Subsequent full SQLite and PostgreSQL suites pass. Neither failure
+was hidden or addressed by loosening an assertion.
+
+Contract adaptations are in A8/B6. Earlier 4.1 dependency decisions remain: supported
+Node 22.23.5, TypeScript 5.9.3 for the generator peer, modern ESLint flat plugins rather
+than the EOL/peer-constrained preset, CSS-only toasts for nonce CSP, exact pins/lockfile,
+and retained framework-generated AGENTS guidance. No dependency change was needed here.
 
 ## B9. Newly discovered issues
 
-No unresolved selected-task blocker remains. The warehouse-list contract gap is
-later4.3 work. Deployment IP identity depends on a correctly configured private
-trusted ingress; the local fixture override cannot establish that production proof.
-The older preset's peer support lag is avoided by current flat plugins. Windows
-port reservations and RAM pressure are environmental facts, not passing assertions.
+No unresolved selected-task test failure remains. Windows port reservations and
+8GB host memory pressure remain operational constraints; build/tests were serialized
+and project workers temporarily paused, then restored. Do not widen loopback binds
+to work around a reserved host port.
+
+A very large lifetime activity history can exceed the existing 2MiB BFF response cap;
+history pagination is a future API/UI gap. Product currency edits and a full payment
+history journal are also backend contract gaps, not hidden client functionality.
+The full buyer UI and settings remain intentionally deferred, not completed features.
 
 ## B10. NOT VERIFIED
 
-- Tasks4.2–4.7 and F2–F10/full F12, screenshots of their missing screens, complete
-  order/SSE consumer flows, settings show-once secrets and buyer tracking rendering.
-- Hosted GitHub Actions execution: the job is configured and local equivalents pass;
-  no push/workflow run was performed.
-- Production deployment/TLS, real reverse proxy/CDN peer identity, serverless/edge
-  compatibility, multi-replica frontend operation, multi-tab auth coherence, load/soak
-  and a comprehensive mobile/browser/assistive-technology matrix.
-- Live Razorpay/provider/email behavior; the optional backend credential test is
-  skipped. SQLite also skips PostgreSQL/Redis-only cases, which pass in that layer.
-- Frontend test coverage percentage, per-route first-load/wire performance, the full
-  4.6 a11y/performance gate and development HMR behavior beyond startup/proxy smoke.
+- Tasks 4.4–4.7 in full; F5–F9 and fullF12; buyer tracking rendering, settings
+  show-once secrets/operations, full screenshots and product README work.
+- Hosted GitHub Actions execution: configured/local equivalents pass; no push/run.
+- Production deployment/TLS, real proxy/CDN identity, serverless/edge compatibility,
+  multi-replica/multi-tab coherence, load/soak and full browser/device/assistive matrix.
+- Real Razorpay/provider/email behavior; the optional credential test is skipped.
+  SQLite skips PostgreSQL/Redis cases, which pass in that layer.
+- Frontend coverage percentage, per-route first-load/wire/Brotli performance,
+  all-screen4.6 accessibility and every adverse network/session-expiry browser scenario.
+- A fresh dependency vulnerability audit on 25 November; dependencies are unchanged
+  from the recorded 24 November clean audit.
 
 ## B11. Reviewer commands (PowerShell)
 
@@ -689,6 +739,9 @@ $env:TEST_REDIS_URL='redis://127.0.0.1:6379/15'
 .venv\Scripts\python -m pytest -q --cov=app --cov-report=json:.coverage.review.json --cov-fail-under=90
 .venv\Scripts\python scripts/check_coverage.py .coverage.review.json
 ```
+
+The browser config uses gated synthetic visitor IPs to isolate repeated Redis quotas.
+Keep BFF_ALLOW_TEST_IP enabled only inside the local test try/finally.
 
 Use a dedicated disposable PostgreSQL database ending in_test and matching host
 port overrides. Leave optional provider credential variables unset for the local
