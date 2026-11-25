@@ -1762,6 +1762,7 @@ export interface operations {
                 limit?: number;
                 offset?: number;
                 status?: ("active" | "suspended") | null;
+                q?: string | null;
             };
             header?: {
                 authorization?: string | null;

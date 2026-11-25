@@ -2,7 +2,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal, get_principal
@@ -36,10 +36,14 @@ def listing(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     status: Literal["active", "suspended"] | None = None,
+    q: str | None = Query(None, max_length=160),
     actor: User = Depends(platform_admin),
     db: Session = Depends(get_db),
 ):
     conditions = [Tenant.status == status] if status else []
+    if q and q.strip():
+        pattern = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        conditions.append(or_(Tenant.name.ilike(pattern, escape="\\"), Tenant.slug.ilike(pattern, escape="\\")))
     total = db.scalar(select(func.count()).select_from(Tenant).where(*conditions)) or 0
     rows = list(
         db.scalars(select(Tenant).where(*conditions).order_by(Tenant.created_at, Tenant.id).limit(limit).offset(offset))
