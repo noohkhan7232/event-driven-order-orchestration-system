@@ -314,7 +314,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Warehouses */
+        get: operations["list_warehouses_api_v1_inventory_warehouses_get"];
         put?: never;
         /** Create Warehouse */
         post: operations["create_warehouse_api_v1_inventory_warehouses_post"];
@@ -1300,6 +1301,17 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** Page[WarehouseRead] */
+        Page_WarehouseRead_: {
+            /** Items */
+            items: components["schemas"]["WarehouseRead"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
         /** PaymentActivity */
         PaymentActivity: {
             /**
@@ -1612,6 +1624,20 @@ export interface components {
         WarehouseCreate: {
             /** Code */
             code: string;
+            /** Name */
+            name: string;
+            /** Region */
+            region: string;
+        };
+        /** WarehouseRead */
+        WarehouseRead: {
+            /** Code */
+            code: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Name */
             name: string;
             /** Region */
@@ -2293,6 +2319,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InventoryRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_warehouses_api_v1_inventory_warehouses_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+                "x-api-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_WarehouseRead_"];
                 };
             };
             /** @description Validation Error */

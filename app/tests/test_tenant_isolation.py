@@ -240,6 +240,7 @@ def test_route_registry_has_no_unclassified_routes():
         ("GET", "/api/v1/inventory"),
         ("POST", "/api/v1/inventory"),
         ("POST", "/api/v1/inventory/warehouses"),
+        ("GET", "/api/v1/inventory/warehouses"),
         ("GET", "/api/v1/inventory/low-stock"),
         ("GET", "/api/v1/inventory/{inventory_id}"),
         ("PATCH", "/api/v1/inventory/{inventory_id}"),

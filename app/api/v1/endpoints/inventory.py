@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,14 @@ from app.db.session import get_db
 from app.models.entities import AuditLog, Inventory, Product, Warehouse
 from app.repositories.inventory import InventoryRepository
 from app.schemas.common import Page
-from app.schemas.inventory import InventoryAdjustment, InventoryCreate, InventoryRead, InventoryUpdate, WarehouseCreate
+from app.schemas.inventory import (
+    InventoryAdjustment,
+    InventoryCreate,
+    InventoryRead,
+    InventoryUpdate,
+    WarehouseCreate,
+    WarehouseRead,
+)
 from app.services.catalog import CatalogValidationError
 
 router = APIRouter()
@@ -26,6 +33,24 @@ def tenant_scope(principal: Principal, scope: str) -> UUID:
     if principal.tenant_id is None:
         raise AuthorizationError("Tenant principal required")
     return principal.tenant_id
+
+
+@router.get("/warehouses", response_model=Page[WarehouseRead])
+def list_warehouses(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+):
+    tenant_id = tenant_scope(principal, "inventory:read")
+    condition = Warehouse.tenant_id == tenant_id
+    total = db.scalar(select(func.count()).select_from(Warehouse).where(condition)) or 0
+    rows = list(
+        db.scalars(
+            select(Warehouse).where(condition).order_by(Warehouse.code, Warehouse.id).limit(limit).offset(offset)
+        )
+    )
+    return Page(items=rows, total=total, limit=limit, offset=offset)
 
 
 @router.post("/warehouses", status_code=201)
