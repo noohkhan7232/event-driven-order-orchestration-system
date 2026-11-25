@@ -30,6 +30,11 @@ export function Shell({
           "/orders",
           "/catalog",
           "/inventory",
+          "/payments",
+          "/api-keys",
+          "/webhooks",
+          "/notifications",
+          "/failed-jobs",
         ].includes(item.href) ? (
           <Link
             key={item.href}

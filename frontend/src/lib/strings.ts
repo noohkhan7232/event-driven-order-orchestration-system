@@ -1,4 +1,244 @@
 export const strings = {
+  ops: {
+    verificationPython: String.raw`import hashlib, hmac, re, time
+
+def verify_oos_webhook(raw_body, headers, secret, now=None):
+    # Call before parsing JSON. After success, parse JSON and deduplicate its signed id durably.
+    try:
+        headers = {key.lower(): value.strip() for key, value in headers.items()}
+        pieces = headers["x-oos-signature"].split(",")
+        if len(pieces) != 2:
+            return False
+        fields = dict(piece.strip().split("=", 1) for piece in pieces)
+        if set(fields) != {"t", "v1"}:
+            return False
+        stamp, digest = fields["t"], fields["v1"]
+        if headers.get("x-oos-timestamp") != stamp:
+            return False
+        if not re.fullmatch(r"[0-9]{1,12}", stamp) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+            return False
+        if abs((time.time() if now is None else now) - int(stamp)) > 300:
+            return False
+        expected = hmac.new(secret.encode(), stamp.encode() + b"." + raw_body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, digest.lower())
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return False
+`,
+    verificationNode: String.raw`const { createHmac, timingSafeEqual } = require("node:crypto");
+
+function verifyOosWebhook(rawBody, headers, secret, now = Math.floor(Date.now() / 1000)) {
+  // Call before parsing JSON. After success, parse JSON and deduplicate its signed id durably.
+  if (!Buffer.isBuffer(rawBody)) return false;
+  const h = new Headers(headers);
+  const pieces = (h.get("X-OOS-Signature") || "").split(",");
+  if (pieces.length !== 2) return false;
+  const fields = new Map(pieces.map(piece => {
+    const at = piece.indexOf("=");
+    return [piece.slice(0, at).trim(), piece.slice(at + 1).trim()];
+  }));
+  if (fields.size !== 2 || !fields.has("t") || !fields.has("v1")) return false;
+  const stamp = fields.get("t"), signature = fields.get("v1");
+  if (h.get("X-OOS-Timestamp") !== stamp) return false;
+  if (!/^[0-9]{1,12}$/.test(stamp) || !/^[0-9a-fA-F]{64}$/.test(signature)) return false;
+  if (Math.abs(now - Number(stamp)) > 300) return false;
+  const expected = createHmac("sha256", secret).update(Buffer.concat([Buffer.from(stamp + "."), rawBody])).digest();
+  const received = Buffer.from(signature, "hex");
+  return received.length === expected.length && timingSafeEqual(expected, received);
+}
+`,
+    ownerOnly: "Store owner access required",
+    title: "Settings and operations",
+    name: "Name",
+    save: "Save changes",
+    done: "Done",
+    confirm: "Confirm",
+    cancel: "Back",
+    copy: "Copy",
+    copied: "Copied.",
+    copyFailed: "Could not copy. Select the value and copy it manually.",
+    empty: "Nothing to show yet.",
+    refresh: "Refresh",
+    none: "Not recorded",
+    never: "Never",
+    all: "All",
+    status: "Status",
+    created: "Created",
+    updated: "Updated",
+    actions: "Actions",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    active: "Active",
+    inactive: "Inactive",
+    secretTitle: "Save your secret now",
+    secretValue: "Secret value",
+    secretHint:
+      "This value is shown once. Save it in your password manager. Leaving this page or hiding this tab clears it. If you lose an API key, revoke it and create another; rotate a lost webhook secret.",
+    saved: "I have saved it",
+    busy: "Updating…",
+    future: "Choose a future expiry or leave it blank.",
+    payments: "Payment settings",
+    paymentHint:
+      "Connect your store’s Razorpay account. Saving credentials does not initiate a payment.",
+    keyId: "Razorpay key ID",
+    keySecret: "Razorpay key secret",
+    webhookSecret: "Razorpay webhook secret",
+    mode: "Mode",
+    test: "Test",
+    live: "Live",
+    connect: "Connect Razorpay",
+    replace: "Replace credentials",
+    disconnect: "Disconnect Razorpay",
+    disconnectHint:
+      "Prepaid orders that require this configuration will stop until you reconnect. Existing payment processing remains managed by the API.",
+    notConnected: "Razorpay is not connected.",
+    paymentSaved:
+      "Payment credentials saved. The secret fields have been cleared.",
+    maskedKey: "Saved key ID",
+    inboundUrl: "Inbound webhook URL",
+    setup: "Set up Razorpay callbacks",
+    setupSteps: [
+      "Choose the matching Test or Live mode in Razorpay, then open Accounts & Settings → Webhooks.",
+      "Add a webhook and paste the inbound URL shown here. It must be publicly reachable; a local address cannot receive Razorpay callbacks.",
+      "Use the same webhook secret you entered here. It is separate from your Razorpay API key secret.",
+      "Select payment.captured, payment.failed, refund.processed and refund.failed, then save the webhook.",
+    ],
+    setupDocs: "Official Razorpay setup guide",
+    replaceHint:
+      "Enter the complete replacement credentials. Saved secrets are never loaded into these fields.",
+    keys: "API keys",
+    keyHint:
+      "Give each integration only the permissions it needs. Secret values are shown once.",
+    createKey: "Create API key",
+    scopesLabel: "Permissions",
+    expiry: "Expires (optional)",
+    lastUsed: "Last used",
+    prefix: "Public prefix",
+    revoke: "Revoke key",
+    revokeHint:
+      "This integration key will stop authenticating immediately. Its secret cannot be recovered.",
+    revoked: "Revoked",
+    expired: "Expired",
+    scopes: {
+      "orders:read": "Read orders and their status",
+      "orders:write": "Create and cancel orders",
+      "catalog:read": "Read products and prices",
+      "catalog:write": "Create and edit products",
+      "inventory:read": "Read stock and warehouses",
+      "inventory:write": "Create stock and adjust quantities",
+    } as Record<string, string>,
+    webhooks: "Outbound webhooks",
+    webhookHint:
+      "Send signed order updates to your own service. Payloads use the API’s safe projection.",
+    createEndpoint: "Add endpoint",
+    editEndpoint: "Edit endpoint",
+    url: "Receiver URL",
+    description: "Description (optional)",
+    eventsLabel: "Events",
+    targetHint:
+      "Use a public HTTPS receiver without credentials or fragments in its URL. The server checks DNS and blocks private targets. HTTP/private targets are reserved for explicitly enabled local tests.",
+    endpointActive: "Receive deliveries",
+    deleteEndpoint: "Remove endpoint",
+    deleteHint: "Stop future deliveries to this receiver.",
+    rotate: "Rotate signing secret",
+    rotateHint:
+      "New deliveries use a new signing secret. Save the new value and update your receiver.",
+    testPing: "Queue test ping",
+    pingHint:
+      "Queue a signed ping for this receiver. Check delivery status to see the result.",
+    enable: "Re-enable endpoint",
+    disable: "Disable endpoint",
+    toggleHint:
+      "Change whether this receiver accepts new deliveries. Re-enabling resets its consecutive-failure counter.",
+    failureCount: "Consecutive failed attempts",
+    disabledReason: "Disabled reason",
+    failureThreshold: "Automatically disabled after repeated failed attempts.",
+    ownerDisabled: "Disabled by the store owner.",
+    deliveries: "Deliveries",
+    attempts: "Attempts",
+    httpStatus: "Last HTTP status",
+    deliveryError: "Last error",
+    nextAttempt: "Next attempt",
+    eventType: "Event type",
+    replayDelivery: "Replay delivery",
+    replayDeliveryHint:
+      "Requeue this saved event. Your receiver may process it again. The API rejects inactive or currently claimed deliveries.",
+    verifyTitle: "Verify signatures in your receiver",
+    verifyHint:
+      "Verify the exact raw request bytes before parsing JSON. Check the timestamp, then parse verified JSON and deduplicate its signed id in durable storage. X-OOS-Delivery-Id is an unsigned diagnostic header. These secrets are separate from Razorpay’s webhook secret.",
+    python: "Python",
+    node: "Node.js",
+    unknownEvent: "Unknown event",
+    eventLabels: {
+      "order.created": "Order received",
+      "order.paid": "Order paid",
+      "order.shipped": "Order shipped",
+      "order.delivered": "Order delivered",
+      "order.failed": "Order failed",
+      "order.cancelled": "Order cancelled",
+      "order.status_changed": "Any order status change",
+      "payment.refunded": "Payment refunded",
+      ping: "Test ping",
+    } as Record<string, string>,
+    notifications: "Notifications",
+    notificationsHint:
+      "Choose whether this store sends configured order notifications.",
+    notificationsEnabled: "Send order notifications",
+    notificationsSaved: "Notification preferences saved.",
+    jobs: "Failed jobs",
+    jobsHint:
+      "Review technical failures before recovery. Private payloads and diagnostics are withheld.",
+    task: "Task",
+    queue: "Queue",
+    retries: "Retries",
+    jobDetail: "Failed job details",
+    openJob: "Open job",
+    replay: "Replay job",
+    discard: "Discard job",
+    replayHint:
+      "Replay reopens only technically failed orders marked RETRIES_EXHAUSTED. For an order still processing, the API may requeue its saved event. Business failures and terminal orders are not reopened; pending refunds must finish first.",
+    discardHint:
+      "Mark this job discarded. This does not recover or cancel the order.",
+    diagnostics: "Private diagnostics withheld.",
+    jobErrors: {
+      RETRIES_EXHAUSTED: "Processing exhausted its retry budget.",
+      PROVIDER_UNAVAILABLE: "A provider was unavailable.",
+      refund_failed:
+        "Refund processing failed; review it before order recovery.",
+      order_not_retryable: "The order cannot be reopened.",
+    } as Record<string, string>,
+    deliveryErrors: {
+      transport_error:
+        "The receiver could not be reached within the transport deadline.",
+      http_status: "The receiver returned an unsuccessful HTTP status.",
+      attempt_budget_exhausted: "Delivery attempts are exhausted.",
+      unsafe_target: "The receiver failed the server’s safe-target checks.",
+    } as Record<string, string>,
+    tenants: "Platform tenants",
+    tenantsHint: "Search store names or URL names and manage access.",
+    search: "Store name or URL name",
+    slug: "Store URL name",
+    suspend: "Suspend store",
+    activate: "Activate store",
+    suspendHint:
+      "Pause this store’s access and authenticated integrations. In-flight workflow recovery remains governed by the API.",
+    activateHint: "Restore this store’s access and authenticated integrations.",
+    reason: "Suspension reason",
+    reasonUnavailable: "This API does not record a suspension reason.",
+    statusLabels: {
+      active: "Active",
+      suspended: "Suspended",
+      queued: "Queued",
+      running: "Running",
+      retrying: "Retrying",
+      failed: "Failed",
+      completed: "Completed",
+      replayed: "Replayed",
+      discarded: "Discarded",
+      pending: "Pending",
+      delivered: "Delivered",
+      dead: "Attempts exhausted",
+    } as Record<string, string>,
+  },
   catalog: {
     title: "Catalog",
     hint: "Keep product details and prices ready for your next order.",
@@ -307,6 +547,18 @@ export const strings = {
   },
 
   errors: {
+    credentials_unavailable:
+      "This server cannot store or read provider credentials. Contact your administrator.",
+    payment_not_configured:
+      "Connect your payment provider before placing prepaid orders that require it.",
+    unsafe_webhook_url:
+      "Use a publicly reachable HTTPS receiver. Private, unsafe or unresolvable targets are blocked by the server.",
+    job_already_replayed:
+      "This job was already replayed. Refresh to see its current status.",
+    order_not_retryable:
+      "This order cannot be reopened. Business failures, cancelled or delivered orders are not retryable.",
+    refund_pending:
+      "A refund is still pending. Wait for it to finish before replaying this job.",
     product_sku_conflict: "That SKU already exists. Choose another SKU.",
     negative_stock:
       "Stock changed while you were editing. Refresh and enter a smaller reduction.",
